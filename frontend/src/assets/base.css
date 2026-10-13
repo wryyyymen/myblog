@@ -1,0 +1,101 @@
+/* 全站设计变量：调整这里即可统一改变颜色、字体和圆角。 */
+:root {
+  color-scheme: light;
+  --color-background: #f6f7f3;
+  --color-background-soft: #edf2ec;
+  --color-background-mute: #e5ece5;
+  --color-surface: #ffffff;
+  --color-heading: #20372f;
+  --color-text: #34483f;
+  --color-muted: #728078;
+  --color-brand: #28624e;
+  --color-brand-hover: #1d4b3b;
+  --color-brand-soft: #eaf3ed;
+  --color-border: #e0e7df;
+  --color-border-hover: #b4c5b9;
+  --color-danger: #a83e39;
+  --color-danger-soft: #fff1ee;
+  --radius-card: 20px;
+  --shadow-card: 0 8px 32px rgb(31 56 43 / 4%);
+  --font-body: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-heading: 'Noto Serif SC', 'Songti SC', SimSun, serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  color: var(--color-text);
+  background: var(--color-background);
+  font: 15px/1.7 var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+h1,
+h2,
+h3 {
+  color: var(--color-heading);
+  line-height: 1.4;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+::selection {
+  color: #173d2c;
+  background: #d2e6d8;
+}
+:focus-visible {
+  outline: 3px solid #91b9a5;
+  outline-offset: 4px;
+}
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 100px;
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

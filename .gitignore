@@ -1,0 +1,25 @@
+# Dependencies and generated output
+node_modules/
+target/
+dist/
+dist-ssr/
+coverage/
+*.log
+*.tsbuildinfo
+
+# Machine-specific files
+.idea/
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local database credentials; use the committed example when setting up
+/backend/src/main/resources/application.yaml
+/backend/src/main/resources/application-local.*
+
+# Empty lockfile outside the actual frontend package
+/package-lock.json
