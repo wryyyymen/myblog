@@ -35,3 +35,21 @@ docker compose --env-file /root/myblog-db.env logs --tail=100 backend
 ```
 
 更新代码后，在仓库目录执行 `git pull`，再按上面的 `docker buildx build` 和 `docker compose up -d` 两条命令重新构建和启动。不要在 Compose 中新增 MySQL 容器，否则会与已迁移的数据库变成两套数据。
+
+## 前端与 Nginx
+
+服务器需要安装 Nginx，并准备至少 2 GiB 交换空间供前端构建使用。当前服务器已配置交换空间。在仓库目录执行：
+
+```bash
+apt-get install -y nginx
+bash deploy/build-frontend.sh
+install -d -m 755 /var/www/myblog
+cp -a frontend/dist/. /var/www/myblog/
+cp deploy/nginx/myblog.conf /etc/nginx/sites-available/myblog
+ln -sfn /etc/nginx/sites-available/myblog /etc/nginx/sites-enabled/myblog
+rm -f /etc/nginx/sites-enabled/default
+nginx -t
+systemctl reload nginx
+```
+
+前端使用相对路径 `/api/...`；Nginx 将这些请求转发到本机后端 `127.0.0.1:8081`，其余路径作为 Vue 页面处理。访问文章详情等地址时，`try_files` 会返回前端的 `index.html`。更新前端后重新运行构建脚本，并复制新的 `dist` 文件，再重载 Nginx。
