@@ -1,0 +1,17 @@
+services:
+  backend:
+    image: myblog-backend:local
+    build:
+      context: ./backend
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 768m
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/myblog
+      SPRING_DATASOURCE_USERNAME: ${DB_USERNAME:-blog_app}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env or pass --env-file}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      SPRING_SQL_INIT_MODE: never
+      SERVER_ADDRESS: 127.0.0.1
+      SERVER_PORT: 8081
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx384m
