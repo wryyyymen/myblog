@@ -25,7 +25,7 @@ docker compose --env-file /root/myblog-db.env ps
 curl -f http://127.0.0.1:8081/api/categories
 ```
 
-`config --quiet` 检查 Compose 文件和必需的环境变量；`up -d --build` 从源码构建镜像并在后台启动。Dockerfile 从 AWS Public ECR 获取 Docker 官方 Maven 和 Eclipse Temurin 镜像，因为当前服务器无法连接 Docker Hub。首次构建需要下载镜像和 Maven 依赖，服务器内存较小时可能需要额外的交换空间。构建过程不会运行测试；部署前应在开发环境运行后端测试。
+`config --quiet` 检查 Compose 文件和必需的环境变量；`up -d --build` 从源码构建镜像并在后台启动。Dockerfile 从 AWS Public ECR 获取 Docker 官方 Maven 和 Eclipse Temurin 镜像，因为当前服务器无法连接 Docker Hub。构建时 Maven 使用宿主机网络，以访问服务器可达的 Maven 仓库。首次构建需要下载镜像和 Maven 依赖，服务器内存较小时可能需要额外的交换空间。构建过程不会运行测试；部署前应在开发环境运行后端测试。
 
 如果启动失败，查看日志：
 
