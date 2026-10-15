@@ -1,11 +1,7 @@
 services:
   backend:
     image: myblog-backend:local
-    build:
-      context: ./backend
-      network: host
-      entitlements:
-        - network.host
+    pull_policy: never
     network_mode: host
     restart: unless-stopped
     mem_limit: 768m

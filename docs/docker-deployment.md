@@ -20,12 +20,13 @@ Copy-Item .env.example .env
 git clone https://github.com/wryyyymen/myblog.git
 cd myblog
 docker compose --env-file /root/myblog-db.env config --quiet
-docker compose --env-file /root/myblog-db.env up -d --build
+docker buildx build --allow=network.host --network=host --load -t myblog-backend:local ./backend
+docker compose --env-file /root/myblog-db.env up -d
 docker compose --env-file /root/myblog-db.env ps
 curl -f http://127.0.0.1:8081/api/categories
 ```
 
-`config --quiet` 检查 Compose 文件和必需的环境变量；`up -d --build` 从源码构建镜像并在后台启动。Dockerfile 从 AWS Public ECR 获取 Docker 官方 Maven 和 Eclipse Temurin 镜像，因为当前服务器无法连接 Docker Hub。构建时 Maven 使用宿主机网络，以访问服务器可达的 Maven 仓库。首次构建需要下载镜像和 Maven 依赖，服务器内存较小时可能需要额外的交换空间。构建过程不会运行测试；部署前应在开发环境运行后端测试。
+`config --quiet` 检查 Compose 文件和必需的环境变量；`docker buildx build` 从源码构建镜像；`docker compose up -d` 在后台启动容器。Dockerfile 从 AWS Public ECR 获取 Docker 官方 Maven 和 Eclipse Temurin 镜像，因为当前服务器无法连接 Docker Hub。构建时 Maven 使用宿主机网络，以访问服务器可达的 Maven 仓库。首次构建需要下载镜像和 Maven 依赖，服务器内存较小时可能需要额外的交换空间。构建过程不会运行测试；部署前应在开发环境运行后端测试。
 
 如果启动失败，查看日志：
 
@@ -33,4 +34,4 @@ curl -f http://127.0.0.1:8081/api/categories
 docker compose --env-file /root/myblog-db.env logs --tail=100 backend
 ```
 
-更新代码后，在仓库目录执行 `git pull`，再执行 `docker compose --env-file /root/myblog-db.env up -d --build`。不要在 Compose 中新增 MySQL 容器，否则会与已迁移的数据库变成两套数据。
+更新代码后，在仓库目录执行 `git pull`，再按上面的 `docker buildx build` 和 `docker compose up -d` 两条命令重新构建和启动。不要在 Compose 中新增 MySQL 容器，否则会与已迁移的数据库变成两套数据。
