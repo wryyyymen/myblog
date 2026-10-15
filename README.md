@@ -78,3 +78,9 @@ cd backend
 ```
 
 `backend/scripts/seed-blog-test-data.sql` 是开发过程中的示例数据脚本，依赖已有表结构和名为 `potato` 的用户，不能作为完整初始化脚本直接使用。
+
+## 后端开发规范
+
+后续功能遵循 Controller、Service、Repository 分层，使用独立 DTO、集中会话管理和业务异常处理。
+
+详细职责及新增功能流程见 [后端结构与开发标准](docs/backend-architecture.md)。项目开发助手约定见 [AGENTS.md](AGENTS.md)。

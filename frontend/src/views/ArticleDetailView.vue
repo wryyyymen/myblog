@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ArticleDocument from '@/components/editor/ArticleDocument.vue'
+import type { ContentFormat } from '@/utils/articleContent'
 import AppIcon from '@/components/AppIcon.vue'
 import { formatDate } from '@/utils/format'
 import { computed, ref, watch } from 'vue'
@@ -10,6 +12,7 @@ interface Article {
   authorId: number
   title: string
   content: string
+  contentFormat?: ContentFormat
   createdAt: string
 }
 
@@ -141,7 +144,7 @@ watch(() => route.params.id, loadArticle, { immediate: true })
           }}<RouterLink v-if="!auth.user" class="text-link" to="/login">去登录</RouterLink>
         </p>
       </header>
-      <div class="article-content">{{ article.content }}</div>
+      <ArticleDocument :content="article.content" :content-format="article.contentFormat" />
       <footer class="reading-end">— 感谢阅读 —</footer>
     </article>
   </main>

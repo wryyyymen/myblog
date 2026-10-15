@@ -1,6 +1,9 @@
 package com.syf.blog.controller;
 
 import com.syf.blog.domain.BlogUser;
+import com.syf.blog.auth.CurrentUserService;
+import com.syf.blog.exception.GlobalExceptionHandler;
+import com.syf.blog.service.UserService;
 import com.syf.blog.repository.BlogUserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +35,10 @@ class UserControllerTest {
 
     @BeforeEach
     void setUp() {
-        mvc = MockMvcBuilders.standaloneSetup(new UserController(users)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new UserController(
+                        new UserService(users, new BCryptPasswordEncoder()), new CurrentUserService(users)))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
     }
 
     @ParameterizedTest
@@ -149,7 +155,7 @@ class UserControllerTest {
 
     @Test
     void registrationCannotGrantAnAdminRoleFromTheRequest() throws Exception {
-        when(users.save(any(BlogUser.class))).thenAnswer(invocation -> {
+        when(users.saveAndFlush(any(BlogUser.class))).thenAnswer(invocation -> {
             BlogUser user = invocation.getArgument(0);
             user.setId(8L);
             return user;
@@ -164,11 +170,95 @@ class UserControllerTest {
                 .andExpect(status().isCreated());
 
         ArgumentCaptor<BlogUser> saved = ArgumentCaptor.forClass(BlogUser.class);
-        verify(users).save(saved.capture());
+        verify(users).saveAndFlush(saved.capture());
         assertEquals("USER", saved.getValue().getRoleCode());
         assertEquals(Boolean.TRUE, saved.getValue().getEnabled());
         assertTrue(new BCryptPasswordEncoder().matches(
                 "test-password-123", saved.getValue().getPasswordHash()));
+    }
+
+
+    @Test
+    void duplicateUsernameUsesTheSharedBusinessErrorResponse() throws Exception {
+        when(users.existsByUsername("owner")).thenReturn(true);
+        mvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":" owner ","password":"test-password-123"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("用户名已经存在"));
+        verify(users, never()).saveAndFlush(any(BlogUser.class));
+    }
+
+    @Test
+    void unknownUserCannotCreateASession() throws Exception {
+        when(users.findByUsername("missing")).thenReturn(Optional.empty());
+        MvcResult result = mvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON).content("""
+                                {"username":"missing","password":"test-password-123"}
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("用户名或密码错误"))
+                .andReturn();
+        assertNull(result.getRequest().getSession(false));
+    }
+
+    @Test
+    void deletedCurrentUserInvalidatesSessionAndKeepsItsMessage() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute("loginUserId", 7L);
+        when(users.findById(7L)).thenReturn(Optional.empty());
+
+        mvc.perform(get("/api/auth/me").session(session))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("登录用户不存在，请重新登录"));
+        assertTrue(session.isInvalid());
+    }
+
+    @Test
+    void absentOrMalformedIdentityReturnsUnauthorized() throws Exception {
+        mvc.perform(get("/api/auth/me"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("请先登录"));
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute("loginUserId", "7");
+        mvc.perform(get("/api/auth/me").session(session))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(users);
+    }
+
+    @Test
+    void extractedRequestsStillRejectInvalidInput() throws Exception {
+        mvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"reader","password":"short"}
+                                """))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":" ","password":"test-password-123"}
+                                """))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(users);
+    }
+
+    @Test
+    void registrationReturnsOnlyPublicFieldsAndDoesNotLogIn() throws Exception {
+        when(users.saveAndFlush(any(BlogUser.class))).thenAnswer(invocation -> {
+            BlogUser user = invocation.getArgument(0);
+            user.setId(8L);
+            return user;
+        });
+        MvcResult result = mvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON).content("""
+                                {"username":" new-user ","password":"test-password-123"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(content().json("""
+                        {"id":8,"username":"new-user"}
+                        """, org.springframework.test.json.JsonCompareMode.STRICT))
+                .andReturn();
+        assertNull(result.getRequest().getSession(false));
     }
 
     private BlogUser user() {

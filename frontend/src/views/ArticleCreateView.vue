@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ArticleEditor from '@/components/editor/ArticleEditor.vue'
+import { hasArticleText } from '@/utils/articleContent'
 import AppIcon from '@/components/AppIcon.vue'
 import { onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
@@ -54,7 +56,7 @@ async function publishArticle() {
     return
   }
 
-  if (!title.value.trim() || !content.value.trim()) {
+  if (!title.value.trim() || !hasArticleText(content.value)) {
     errorMessage.value = '请输入标题和正文'
     return
   }
@@ -80,6 +82,7 @@ async function publishArticle() {
       body: JSON.stringify({
         title: title.value.trim(),
         content: content.value,
+        contentFormat: 'HTML',
         categoryId: category,
       }),
     })
@@ -140,18 +143,9 @@ onMounted(loadCategories)
           >
         </div>
         <div class="field">
-          <label for="title">文章标题</label
-          ><input
-            id="title"
-            v-model="title"
-            maxlength="200"
-            placeholder="一个清晰的标题，是故事的开始"
-            :disabled="submitting"
-            required
-          />
-          <div class="field-caption">
-            <span>用一句话概括你的文章</span><span>{{ title.length }} / 200</span>
-          </div>
+          <label for="title">文章标题</label>
+          <input id="title" v-model="title" maxlength="200" placeholder="用一句话概括你的文章" :disabled="submitting" required />
+          <div class="field-caption"><span>标题最多 200 个字符</span><span>{{ title.length }} / 200</span></div>
         </div>
         <div class="field">
           <label for="category">文章分类</label>
@@ -181,18 +175,8 @@ onMounted(loadCategories)
           </button>
         </div>
         <div class="field">
-          <label for="content">正文</label
-          ><textarea
-            id="content"
-            v-model="content"
-            rows="12"
-            placeholder="不必等想法完美，先写下第一句话……"
-            :disabled="submitting"
-            required
-          ></textarea>
-          <div class="field-caption">
-            <span>换行会保留在文章中</span><span>{{ content.length }} 字符</span>
-          </div>
+          <span class="field-label">正文</span>
+          <ArticleEditor v-model="content" :disabled="submitting" />
         </div>
         <div class="editor-footer">
           <p>发布后，读者就能在博客中阅读你的文章。</p>

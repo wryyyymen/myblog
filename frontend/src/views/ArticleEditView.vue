@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ArticleEditor from '@/components/editor/ArticleEditor.vue'
+import { hasArticleText, toEditorHtml, type ContentFormat } from '@/utils/articleContent'
 import AppIcon from '@/components/AppIcon.vue'
 // setup：这里声明的变量和函数可以直接在下面的模板中使用
 // lang="ts"：这一部分使用 TypeScript
@@ -20,6 +22,7 @@ interface Article {
   authorId: number
   title: string
   content: string
+  contentFormat?: ContentFormat
 }
 
 // 当前路由信息，例如网址中的文章 id
@@ -113,7 +116,7 @@ async function loadArticle() {
     articleId.value = article.id
     authorId.value = article.authorId
     title.value = article.title
-    content.value = article.content
+    content.value = toEditorHtml(article.content, article.contentFormat)
   } catch {
     // 请求出错、JSON 解析失败，或者上面主动抛出异常时进入这里
     loadError.value = '文章加载失败，请稍后重试'
@@ -140,10 +143,8 @@ async function saveArticle() {
     return
   }
 
-  // trim()：去掉字符串两端的空白
-  // !字符串：字符串为空时，这个判断为 true
-  // 因此，标题或正文为空、只有空白时，都不能提交
-  if (!title.value.trim() || !content.value.trim()) {
+  // 标题检查空白，富文本正文先提取文字，避免把 <p></p> 当成有效正文
+  if (!title.value.trim() || !hasArticleText(content.value)) {
     saveError.value = '请输入标题和正文'
     return
   }
@@ -166,9 +167,9 @@ async function saveArticle() {
         // 提交标题时，去掉两端的空白
         title: title.value.trim(),
 
-        // 正文保留用户输入的内容
-        // 上面的 trim() 只用于检查，这里没有删掉正文的空白
+        // 编辑器输出 HTML，格式字段用于区分旧的纯文本文章
         content: content.value,
+        contentFormat: 'HTML',
       }),
     })
 
@@ -279,18 +280,8 @@ watch(() => route.params.id, loadArticle, { immediate: true })
           </div>
         </div>
         <div class="field">
-          <label for="content">正文</label
-          ><textarea
-            id="content"
-            v-model="content"
-            rows="12"
-            placeholder="继续完善你的文字……"
-            :disabled="saving"
-            required
-          ></textarea>
-          <div class="field-caption">
-            <span>换行会保留在文章中</span><span>{{ content.length }} 字符</span>
-          </div>
+          <span class="field-label">正文</span>
+          <ArticleEditor v-model="content" :disabled="saving" />
         </div>
         <p v-if="saveError" class="notice notice-error" role="alert">{{ saveError }}</p>
         <div class="editor-footer">

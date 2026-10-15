@@ -2,6 +2,8 @@ package com.syf.blog.domain;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -35,6 +37,13 @@ public class Article {
     // 正文，与数据库的 LONGTEXT 类型保持一致
     @Column(name = "content", nullable = false, columnDefinition = "LONGTEXT")
     private String content;
+
+    // 显式区分历史纯文本和富文本，避免根据内容猜测格式。
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "content_format", nullable = false, length = 16,
+            columnDefinition = "VARCHAR(16) DEFAULT 'TEXT'")
+    private ContentFormat contentFormat = ContentFormat.TEXT;
 
     // 阅读量，新文章默认从 0 开始
     @Column(name = "view_count", nullable = false,

@@ -12,6 +12,15 @@ import java.util.List;
     OrderBy	        按某个字段排序
     NameAsc	        根据 name 字段升序排列
     * */
-public interface CategoryRepository extends JpaRepository<Category,Long> {
+public interface CategoryRepository extends JpaRepository<Category, Long> {
     List<Category> findByEnabledTrueOrderByNameAsc();
+
+    /**
+     * 查询全部分类，包含启用和停用的分类，按名称升序排列。
+     *
+     * @return 分类列表
+     */
+    List<Category> findAllByOrderByNameAsc();
+
+
 }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ContentFormat } from '@/utils/articleContent'
 import AppIcon from '@/components/AppIcon.vue'
 import BlogArtwork from '@/components/BlogArtwork.vue'
 import { articleExcerpt, formatDate } from '@/utils/format'
@@ -14,6 +15,7 @@ interface Article {
   title: string
   createdAt: string
   content?: string
+  contentFormat?: ContentFormat
   categoryId?: number
   coverUrl?: string | null
 }
@@ -193,7 +195,7 @@ async function filterByCategory(id: number | '') {
               <h3>
                 <RouterLink :to="'/articles/' + article.id">{{ article.title }}</RouterLink>
               </h3>
-              <p class="article-excerpt">{{ articleExcerpt(article.content) }}</p>
+              <p class="article-excerpt">{{ articleExcerpt(article.content, article.contentFormat) }}</p>
               <div class="article-card-footer">
                 <time class="article-date" :datetime="article.createdAt"
                   ><AppIcon name="calendar" />{{ formatDate(article.createdAt) }}</time

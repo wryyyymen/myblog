@@ -1,64 +1,40 @@
 package com.syf.blog.controller;
 
-import com.syf.blog.domain.BlogUser;
-import com.syf.blog.repository.BlogUserRepository;
+import com.syf.blog.auth.CurrentUserService;
+import com.syf.blog.dto.user.LoginRequest;
+import com.syf.blog.dto.user.RegisterRequest;
+import com.syf.blog.dto.user.RegisterResponse;
+import com.syf.blog.dto.user.UserResponse;
+import com.syf.blog.service.UserService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.Map;
-import java.util.Optional;
 
 /**
  * 用户认证接口，提供注册、登录、查询当前用户和退出登录功能。
  *
  * <p>基础路径：{@code /api/auth}。登录身份保存在后端 Session 的 {@code loginUserId} 中。</p>
  */
+@Tag(name = "用户认证", description = "注册、Session 登录、当前用户和退出登录")
 @RestController
 @RequestMapping("/api/auth")
 public class UserController {
-    private final BlogUserRepository users;
-    // 使用 BCrypt 编码注册密码，并校验登录密码。
-    private final PasswordEncoder encoder = new BCryptPasswordEncoder();
+    private final UserService userService;
+    private final CurrentUserService currentUserService;
 
     /**
-     * 创建用户控制器，由 Spring 注入用户仓库。
-     *
-     * @param users 用户数据仓库，用于查询和保存用户
+     * @param userService 用户注册及凭据校验服务
+     * @param currentUserService Session 身份及会话管理组件
      */
-    public UserController(BlogUserRepository users) {
-        this.users= users;
+    public UserController(UserService userService, CurrentUserService currentUserService) {
+        this.userService = userService;
+        this.currentUserService = currentUserService;
     }
-
-    /**
-     * 注册账号的 JSON 请求体。
-     *
-     * @param username 用户名，不能为空或全为空白，注册时去掉两端空白
-     * @param password 明文密码，不能为空或全为空白，至少 8 个字符，保存前使用 BCrypt 编码
-     */
-
-    public record  RegisterRequest(
-            @NotBlank String username,
-            @NotBlank @Size(min = 8) String password
-    ){}
-
-    /**
-     * 登录账号的 JSON 请求体。
-     *
-     * @param username 用户名，不能为空或全为空白，查询时去掉两端空白
-     * @param password 明文密码，不能为空或全为空白，用于与数据库中的密码哈希校验
-     */
-    public record LoginRequest(
-            @NotBlank String username,
-            @NotBlank String password
-    ){}
 
     /**
      * 注册一个默认角色为 {@code USER}、启用状态为 {@code true} 的账号。
@@ -70,24 +46,19 @@ public class UserController {
      * @return 成功返回 201 和用户的 {@code id}、{@code username}；
      *         参数校验失败返回 400；用户名已存在返回 409
      */
+    @Operation(
+            summary = "注册账号",
+            description = "允许匿名访问。创建启用的 USER 账号，密码使用 BCrypt 保存；注册成功不会自动登录。",
+            responses = {
+                    @ApiResponse(responseCode = "201", description = "注册成功，返回 id 和 username"),
+                    @ApiResponse(responseCode = "400", description = "请求参数不合法"),
+                    @ApiResponse(responseCode = "409", description = "用户名已存在")
+            })
     @PostMapping("/register")
-    public ResponseEntity<?> register(
+    public ResponseEntity<RegisterResponse> register(
             @Valid @RequestBody RegisterRequest request
-    ){
-        String username = request.username().trim();
-        // 用户名重复时返回 HTTP 409，表示与已有数据冲突。
-        if(users.existsByUsername(username)){
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(Map.of("message", "用户名已经存在"));
-        }
-
-        BlogUser user = users.save(
-                new BlogUser(username, encoder.encode(request.password()))
-        );
-
-        return ResponseEntity.status(HttpStatus.CREATED).
-                body(Map.of("id",user.getId(),"username",user.getUsername()));
-
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(userService.register(request));
     }
 
     /**
@@ -101,40 +72,22 @@ public class UserController {
      * @return 成功返回 200 和 {@code id}、{@code username}、{@code role}；
      *         参数校验失败返回 400；用户名或密码错误返回 401；账号停用返回 403
      */
+    @Operation(
+            summary = "用户登录",
+            description = "校验密码及账号状态，建立 Session 并更换 Session ID。后续请求携带登录响应设置的会话 Cookie。",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "登录成功，返回 id、username 和 role"),
+                    @ApiResponse(responseCode = "400", description = "请求参数不合法"),
+                    @ApiResponse(responseCode = "401", description = "用户名或密码错误"),
+                    @ApiResponse(responseCode = "403", description = "账号已停用")
+            })
     @PostMapping("/login")
-    public ResponseEntity<?> login(
+    public ResponseEntity<UserResponse> login(
             @Valid @RequestBody LoginRequest request,
             HttpServletRequest httpRequest) {
-        Optional<BlogUser> result = users.findByUsername(request.username().trim());
-
-        if (result.isEmpty()
-                || !encoder.matches(request.password(), result.get().getPasswordHash())) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(Map.of("message", "用户名或密码错误"));
-        }
-
-        BlogUser user = result.get();
-
-        if (!Boolean.TRUE.equals(user.getEnabled())) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("message", "账号已停用"));
-        }
-        // 获取当前会话，没有会话就创建一个
-        HttpSession session = httpRequest.getSession();
-
-        // 登录成功后更换会话编号
-        httpRequest.changeSessionId();
-        // 在后端会话中保存登录用户的 ID
-        session.setAttribute("loginUserId",user.getId());
-
-
-        return ResponseEntity.ok(
-                Map.of(
-                        "id", user.getId(),
-                        "username", user.getUsername(),
-                        "role", user.getRoleCode()
-                )
-        );
+        UserResponse user = userService.authenticate(request);
+        currentUserService.startSession(httpRequest, user.id());
+        return ResponseEntity.ok(user);
     }
 
     /**
@@ -147,39 +100,17 @@ public class UserController {
      * @return 成功返回 200 和 {@code id}、{@code username}、{@code role}；
      *         未登录、用户不存在或账号停用时返回 401
      */
+    @Operation(
+            summary = "查询当前登录用户",
+            description = "根据 Session 查询数据库中的最新角色及账号状态。用户不存在或账号停用时使会话失效。",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "返回 id、username 和 role"),
+                    @ApiResponse(responseCode = "401", description = "未登录、用户不存在或账号已停用")
+            })
     @GetMapping("/me")
-    public ResponseEntity<?> me(HttpServletRequest httpRequest){
-
-        // 只读取已有会话，没有就返回 null。
-        HttpSession session = httpRequest.getSession(false);
-
-        if(session == null|| session.getAttribute("loginUserId") == null){
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message","请先登录"));
-        }
-
-        Long userId = (Long) session.getAttribute("loginUserId");
-
-        Optional<BlogUser> result = users.findById(userId);
-
-
-        if(result.isEmpty()){
-            session.invalidate();
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(Map.of("message","登录用户不存在，请重新登录"));
-        }
-        BlogUser user = result.get();
-
-        if (!Boolean.TRUE.equals(user.getEnabled())) {
-            session.invalidate();
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(Map.of("message", "账号已停用"));
-        }
-
-        return ResponseEntity.ok(Map.of(
-                "id", user.getId(),
-                "username", user.getUsername(),
-                "role",user.getRoleCode()
-        ));
+    public ResponseEntity<UserResponse> me(HttpServletRequest httpRequest) {
+        return ResponseEntity.ok(
+                UserResponse.from(currentUserService.requireProfileUser(httpRequest)));
     }
 
     /**
@@ -190,14 +121,15 @@ public class UserController {
      * @param httpRequest 当前 HTTP 请求，用于查找并使已有 Session 失效
      * @return 204，响应体为空
      */
+    @Operation(
+            summary = "退出登录",
+            description = "使已有 Session 失效；未登录时调用也能成功，不创建新 Session。",
+            responses = {
+                    @ApiResponse(responseCode = "204", description = "退出成功，响应体为空")
+            })
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(HttpServletRequest httpRequest) {
-        HttpSession session = httpRequest.getSession(false);
-
-        if (session != null) {
-            session.invalidate();
-        }
-
+        currentUserService.logout(httpRequest);
         return ResponseEntity.noContent().build();
     }
 }
