@@ -1,128 +1,106 @@
-# 需求规范：坦克大战网页联机版
+# Requirements — 网页联机坦克对战系统（首版）
 
-## 引言
+采用 Kiro 规范驱动开发（SDD）的 requirements 文档格式：每条需求 = 用户故事 + EARS 验收标准。
+EARS 句式：`WHEN <触发> THE SYSTEM SHALL <行为>` / `IF <条件> THEN THE SYSTEM SHALL <行为>` /
+`WHILE <状态> THE SYSTEM SHALL <行为>`。
 
-本规范描述在现有博客系统中新增的双人对战坦克游戏。玩家使用已登录的博客账号进入游戏，两名玩家在同一房间内实时对战，先击毁对方坦克者获胜。
+范围：一张地图、两人一房间、移动射击至分出胜负。
+角色：`player`（玩家）、`owner`（房主，player 的子集）。
 
-游戏运行在浏览器中，地图数据来自后端接口，玩家操作与战局状态通过 WebSocket 在客户端与服务端之间同步。
+---
 
-## 术语表
+## R1 创建房间
 
-| 术语 | 定义 |
-|---|---|
-| 玩家 | 使用有效博客账号登录并进入游戏的用户 |
-| 坦克 | 玩家在对局中操控的单位，占地一个格子（24×24 像素） |
-| 战局 | 两名玩家在同一房间进行的一次完整对战，从开始到分出胜负 |
-| 格子 | 地图的最小单位，边长由地图的 `tileSize` 字段指定，当前为 24 像素 |
-| 材质 | 格子的类型编号：0 空地、1 砖墙、2 钢墙、3 河流、4 树林、5 冰面 |
-| 朝向 | 坦克面对的方向，取值 0 上、1 下、2 左、3 右 |
-| 房间 | 两名玩家进行对战的组织单位，包含房间号、房主和成员列表 |
-| 地图种子 | 后端返回的二维数组，每个元素是一个格子的材质编号 |
-
-## 需求
-
-### 需求 1：进入游戏并加载地图
-
-**用户故事**：作为玩家，我打开游戏页面后应当看到完整战场，这样我能立即开始操作，而不必等待无反馈的空白页面。
+**用户故事**
+作为 `player`，我想创建一个房间并拿到房间号，以便邀请另一名玩家加入。
 
 **验收标准**
+1. WHEN 玩家在大厅点击「创建房间」 THE SYSTEM SHALL 生成 6 位数字房间号并在列表显示该房间。
+2. WHEN 房间创建成功 THE SYSTEM SHALL 将创建者置为房主并占用席位 1。
+3. IF 玩家未登录 THEN THE SYSTEM SHALL 拒绝创建并返回 `SESSION_EXPIRED`。
 
-1. WHEN 玩家访问 `/game` 页面，THE SYSTEM SHALL 自动请求地图数据并完成画布初始化。
-2. WHILE 地图和素材正在加载，THE SYSTEM SHALL 在画布位置显示加载提示文字。
-3. WHEN 地图数据加载完成，THE SYSTEM SHALL 在画布中按材质逐格绘制地图，绘制结果与后端返回的种子矩阵一致。
-4. IF 地图请求失败，THEN THE SYSTEM SHALL 显示明确的错误提示，不得呈现无反馈的空白画布。
+---
 
-### 需求 2：坦克移动
+## R2 加入房间
 
-**用户故事**：作为玩家，我想用方向键控制坦克移动，这样我才能躲避攻击和调整射击位置。
-
-**验收标准**
-
-1. WHEN 玩家按住方向键或 W/A/S/D，THE SYSTEM SHALL 按对应方向移动坦克，速度为每秒 72 像素。
-2. WHEN 玩家松开所有方向键，THE SYSTEM SHALL 立即停止移动，并保持坦克当前朝向不变。
-3. WHEN 玩家同时按住垂直和水平方向的按键，THE SYSTEM SHALL 只响应最后按下的那个方向。
-4. WHEN 页面失去焦点或玩家离开页面，THE SYSTEM SHALL 清空当前按键状态，坦克不得继续保持移动。
-
-### 需求 3：地图边界限制
-
-**用户故事**：作为玩家，我不希望坦克开出画面，这样我不会因为看不到自己的坦克而失去控制。
+**用户故事**
+作为 `player`，我想凭房间号加入房间，以便与房主开始对战。
 
 **验收标准**
+1. WHEN 玩家输入 6 位房间号并点击「加入房间」 THE SYSTEM SHALL 将其放入空闲席位。
+2. IF 房间已满 THEN THE SYSTEM SHALL 返回 `ROOM_FULL`，前端显示「房间已满，请换一个房间」。
+3. IF 房间号不存在 THEN THE SYSTEM SHALL 提示「房间不存在」且不改变列表状态。
+4. WHEN 第二名玩家加入成功 THE SYSTEM SHALL 在 1 秒内同步双方席位信息。
 
-1. WHEN 坦克向任意方向移动到画布边缘，THE SYSTEM SHALL 阻止其继续移动。
-2. WHILE 坦克处于边界位置，THE SYSTEM SHALL 保持坦克完整可见，其右下角不得超出画布范围。
-3. WHEN 玩家在边界处反向按键，THE SYSTEM SHALL 立即允许坦克朝相反方向移动。
+---
 
-### 需求 4：墙体碰撞
+## R3 准备与开局
 
-**用户故事**：作为玩家，我希望坦克被墙挡住，这样地形才有战术意义。
-
-**验收标准**
-
-1. WHEN 坦克即将进入材质为砖墙（1）、钢墙（2）或河流（3）的格子，THE SYSTEM SHALL 阻止该次移动，坦克停在原地。
-2. WHEN 坦克在材质为树林（4）或冰面（5）的格子上，THE SYSTEM SHALL 允许通行，首版冰面按普通地面处理。
-3. IF 坦克的任意一角落在不可通行的格子上，THEN THE SYSTEM SHALL 判定该位置不可进入。
-
-### 需求 5：发射子弹
-
-**用户故事**：作为玩家，我想按键发射子弹，这是我对付对手的唯一手段。
+**用户故事**
+作为 `owner`，我想在双方准备后开始对局，以便控制开局时机。
 
 **验收标准**
+1. WHEN 玩家点击「准备」 THE SYSTEM SHALL 将本人状态置为已准备并同步给对方。
+2. WHILE 双方均为已准备 THE SYSTEM SHALL 使房主的「开始游戏」按钮可用。
+3. IF 非房主点击开始 THEN THE SYSTEM SHALL 返回 `NOT_OWNER`，前端按钮保持置灰。
+4. WHEN 房主开始对局 THE SYSTEM SHALL 向双方下发 `game_start` 并复制地图模板为本局状态。
 
-1. WHEN 玩家按下开火键且当前不在冷却中，THE SYSTEM SHALL 从坦克朝向的一侧生成一颗子弹。
-2. WHEN 子弹生成后，THE SYSTEM SHALL 进入开火冷却，冷却期间不受理新的开火请求。
-3. WHEN 子弹飞行时，THE SYSTEM SHALL 沿生成时的朝向直线移动，速度为每秒 240 像素。
-4. WHEN 同一玩家已存在的子弹数量达到上限（首版为 1 颗），THE SYSTEM SHALL 拒绝新的开火请求。
+---
 
-### 需求 6：子弹命中判定
+## R4 坦克移动
 
-**用户故事**：作为玩家，我希望子弹打中东西有明确结果，这样我知道自己的攻击是否有效。
-
-**验收标准**
-
-1. WHEN 子弹命中砖墙，THE SYSTEM SHALL 销毁该格砖墙并移除子弹。
-2. WHEN 子弹命中钢墙，THE SYSTEM SHALL 移除子弹，钢墙保持不变。
-3. WHEN 子弹命中敌方坦克，THE SYSTEM SHALL 扣除该坦克生命值并移除子弹。
-4. WHEN 子弹飞出画布边界，THE SYSTEM SHALL 移除该子弹。
-
-### 需求 7：生命值与对局结束
-
-**用户故事**：作为玩家，我希望对局有明确的胜负结果，这样一局打完我知道谁赢了。
+**用户故事**
+作为 `player`，我想用方向键或 WASD 控制坦克移动，以便在对局中走位。
 
 **验收标准**
+1. WHEN 玩家按下方向键或 WASD THE SYSTEM SHALL 采集方向并只向服务端发送 `input{dir}`，不上报坐标。
+2. WHEN 服务端收到 `input` THE SYSTEM SHALL 按帧推进该坦克坐标，并将坐标钳制在地图边界内。
+3. WHEN 服务端更新坐标 THE SYSTEM SHALL 以 10 Hz 向房间双方广播 `game_state`。
+4. WHILE 前端收到 `game_state` THE SYSTEM SHALL 在两次快照之间插值渲染，位置误差不超过 2 像素。
+5. WHEN 玩家松开按键 THE SYSTEM SHALL 在 100 ms 内停止该坦克移动。
+6. WHEN 玩家离开页面 THE SYSTEM SHALL 移除键盘监听并停止动画帧循环。
 
-1. WHEN 新战局开始，THE SYSTEM SHALL 为每名玩家的坦克设置初始生命值 3 点。
-2. WHEN 某辆坦克生命值降至 0，THE SYSTEM SHALL 立即将该玩家判定为失败，并结束本局。
-3. WHEN 本局结束，THE SYSTEM SHALL 向双方显示结算界面，标明获胜方或平局。
-4. WHEN 双方在同一时刻生命值归零，THE SYSTEM SHALL 判定为平局。
+---
 
-### 需求 8：创建房间
+## R5 发射子弹
 
-**用户故事**：作为玩家，我想开一个房间等对手进来，这样我才能和队友对战。
-
-**验收标准**
-
-1. WHEN 已登录玩家请求创建房间，THE SYSTEM SHALL 生成唯一房间号并将创建者设为房主。
-2. IF 玩家已经在某个房间中，THEN THE SYSTEM SHALL 拒绝本次创建请求并返回当前房间信息。
-3. WHEN 房间创建成功，THE SYSTEM SHALL 向房主推送房间状态，包含房间号、成员列表和准备状态。
-
-### 需求 9：加入房间
-
-**用户故事**：作为玩家，我想输入房间号加入对战，这样我能和指定的人一起玩。
+**用户故事**
+作为 `player`，我想按空格发射子弹，以便攻击对方。
 
 **验收标准**
+1. WHEN 玩家按下空格 AND 冷却时间已到 THE SYSTEM SHALL 发送 `fire{dir, tankId}`。
+2. IF 冷却时间未到 THEN THE SYSTEM SHALL 丢弃本次输入，不产生子弹。
+3. WHEN 服务端收到 `fire` THE SYSTEM SHALL 在坦克当前位置按朝向生成一颗子弹。
+4. WHILE 子弹存在 THE SYSTEM SHALL 按帧推进其坐标。
+5. WHEN 子弹越出地图边界 THE SYSTEM SHALL 销毁该子弹并从双方的 `game_state` 中移除。
+6. WHEN 前端收到含 `bullets` 的快照 THE SYSTEM SHALL 绘制全部子弹，双方子弹集合保持一致。
 
-1. WHEN 玩家提交有效的房间号，且该房间处于等待状态且有空位，THE SYSTEM SHALL 将其加入房间成员列表。
-2. IF 房间不存在、已满员或已开始对局，THEN THE SYSTEM SHALL 拒绝加入并返回具体原因。
-3. WHEN 两名玩家都进入房间并准备，THE SYSTEM SHALL 允许房主发起开局。
+---
 
-### 需求 10：双人对局同步
+## R6 结算显示
 
-**用户故事**：作为玩家，我希望对手的动作能实时出现在我的画面上，否则这个游戏没法玩。
+**用户故事**
+作为 `player`，我想在结束时看到胜负与统计，以便知道本局结果。
 
 **验收标准**
+1. WHEN 一方坦克血量归零 THE SYSTEM SHALL 判定胜负并下发 `game_over{winnerId, stats[], durationSec}`。
+2. WHEN 前端收到 `game_over` THE SYSTEM SHALL 在 500 ms 内渲染结算页，显示胜负、命中数、承受伤害、用时。
+3. IF 前端收到的 `winnerId` 与本机玩家一致 THEN THE SYSTEM SHALL 显示「胜利」，否则显示「失败」。
+4. IF 对局因对方断线结束 THEN THE SYSTEM SHALL 显示「对方已离开，本局结束」且不显示胜负。
+5. WHILE 当前玩家非房主 THE SYSTEM SHALL 将「再来一局」按钮置灰。
+6. WHEN 出现错误 THEN THE SYSTEM SHALL 按错误码映射表显示中文提示，不展示 `code` 与堆栈。
 
-1. WHEN 战局进行中，THE SYSTEM SHALL 以每秒 10 次的频率向房间内双方推送完整战局状态。
-2. WHEN 玩家提交操作，THE SYSTEM SHALL 由服务端计算移动和碰撞结果，客户端不得自行决定坦克位置。
-3. WHEN 玩家网络断开，THE SYSTEM SHALL 在 15 秒内保留其房间席位，允许同账号重连恢复。
-4. IF 断线超过保留期限，THEN THE SYSTEM SHALL 判定该玩家本局失败。
+---
+
+## R7 非功能要求
+
+1. WHEN 玩家产生输入 THE SYSTEM SHALL 在 100 ms 内反映到本机画面（本地环境）。
+2. WHILE 战斗进行中 THE SYSTEM SHALL 保持画面帧率不低于 30 fps。
+3. IF 一方连接中断 THEN THE SYSTEM SHALL 在 3 秒内通知另一方。
+4. THE SYSTEM SHALL 在 Chrome 与 Edge 最近两个大版本上正常运行。
+
+---
+
+## 不在本期范围
+
+排行榜、匹配队列、AI 敌人、道具、多地图编辑器、移动端触控、聊天、观战。
