@@ -13,6 +13,13 @@ import {
   removeOutOfBounds,
   type BulletData,
 } from '@/game/bullet'
+import {
+  LOCAL_PLAYER_ID,
+  toResultView,
+  type GameOverData,
+  type ResultViewModel,
+} from '@/game/result'
+import ResultPanel from '@/components/ResultPanel.vue'
 
 // 保存画布元素和页面加载状态
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -24,6 +31,67 @@ const hud = ref('')
 
 // 方向编号转成中文，只给坐标显示用
 const DIRECTION_NAMES = ['上', '下', '左', '右'] as const
+
+// 结算面板的数据。null 表示没有结算，面板不显示
+const result = ref<ResultViewModel | null>(null)
+
+// 错误提示。有值时结算面板显示错误而不是胜负
+const resultError = ref<string | null>(null)
+
+// 开发阶段预览结算界面用的样例数据。
+// 接入联机后删掉这一段，改为处理服务端下发的 game_over 消息。
+const DEMO_RESULTS: GameOverData[] = [
+  {
+    winnerId: LOCAL_PLAYER_ID,
+    stats: [
+      { playerId: LOCAL_PLAYER_ID, hits: 3, damage: 3 },
+      { playerId: 'remote', hits: 1, damage: 1 },
+    ],
+    durationSec: 47,
+    reason: 'destroyed',
+  },
+  {
+    winnerId: 'remote',
+    stats: [
+      { playerId: LOCAL_PLAYER_ID, hits: 1, damage: 1 },
+      { playerId: 'remote', hits: 3, damage: 3 },
+    ],
+    durationSec: 63,
+    reason: 'destroyed',
+  },
+  {
+    winnerId: null,
+    stats: [
+      { playerId: LOCAL_PLAYER_ID, hits: 2, damage: 2 },
+      { playerId: 'remote', hits: 2, damage: 2 },
+    ],
+    durationSec: 38,
+    reason: 'draw',
+  },
+]
+
+let demoIndex = 0
+
+// 按 K 依次预览胜利、失败、平局三种结算样式
+function handleDemoKey(event: KeyboardEvent): void {
+  if (event.code !== 'KeyK') return
+  const data = DEMO_RESULTS[demoIndex % DEMO_RESULTS.length]!
+  demoIndex++
+  resultError.value = null
+  result.value = toResultView(data)
+}
+
+// 再来一局：只关掉面板。真实联机时这里要发 room:rematch 给服务端
+function handleRematch(): void {
+  result.value = null
+  resultError.value = null
+}
+
+// 返回大厅：真实联机时这里要跳转到大厅路由
+function handleLeave(): void {
+  result.value = null
+  resultError.value = null
+}
 
 // 保存解除键盘绑定的方法
 let releaseKeys: (() => void) | undefined
@@ -211,6 +279,11 @@ onMounted(async () => {
   }
 })
 
+// 开发阶段用来预览结算界面；接入联机后移除这个监听
+onMounted(() => {
+  window.addEventListener('keydown', handleDemoKey)
+})
+
 //页面离开时触发
 onUnmounted(() => {
   // 阻止异步初始化和绘制继续执行
@@ -224,6 +297,9 @@ onUnmounted(() => {
 
   // 解除键盘监听
   releaseKeys?.()
+
+  // 移除结算预览的监听
+  window.removeEventListener('keydown', handleDemoKey)
 })
 
 
@@ -239,16 +315,27 @@ onUnmounted(() => {
   </p>
   <!-- 坐标显示：确认坦克真的在动，也方便对照代码里的计算 -->
   <p v-if="!loading && !errorMessage" class="hud" role="status">{{ hud }}</p>
-  <canvas
-    ref="canvasRef"
-    width="960"
-    height="624"
-    tabindex="0"
-    aria-label="坦克大战，使用方向键或 WASD 移动"
-    @pointerdown="canvasRef?.focus()"
-  >
-    当前浏览器不支持 Canvas。
-  </canvas>
+  <div class="canvas-wrap">
+    <canvas
+      ref="canvasRef"
+      width="960"
+      height="624"
+      tabindex="0"
+      aria-label="坦克大战，使用方向键或 WASD 移动，空格开火"
+      @pointerdown="canvasRef?.focus()"
+    >
+      当前浏览器不支持 Canvas。
+    </canvas>
+
+    <!-- 结算面板：覆盖在画布上，有结果或错误时才出现 -->
+    <ResultPanel
+      :result="result"
+      :error="resultError"
+      :can-rematch="true"
+      @rematch="handleRematch"
+      @leave="handleLeave"
+    />
+  </div>
   </main>
 </template>
 
@@ -261,13 +348,21 @@ onUnmounted(() => {
   color: #526176;
 }
 
+.canvas-wrap {
+  position: relative;
+  max-width: 960px;
+  margin: 20px auto 0;
+}
+
 canvas {
   display: block;
   width: 100%;
 
   height: auto;
+  /* canvas 是替换元素，只写 height:auto 时高度会取内在尺寸 624px 而不是按比例缩放，
+     结果画布被横向拉伸。用 aspect-ratio 锁死 960:624 的原始比例。 */
+  aspect-ratio: 960 / 624;
   max-width: 960px;
-  margin: 20px auto 0;
   background: #000;
   image-rendering: pixelated;
 }
