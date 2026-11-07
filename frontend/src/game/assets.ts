@@ -9,6 +9,19 @@ export const gameAssets = {
   tree: `${resourceBase}png/map/tiles/tree.png`,
   ice: `${resourceBase}png/map/tiles/ice.png`,
   playerTank: `${resourceBase}png/players/tank_T1_0.png`,
+  // 子弹按方向分成四张图，每张 12×12
+  bulletUp: `${resourceBase}png/projectiles/bullet_up.png`,
+  bulletDown: `${resourceBase}png/projectiles/bullet_down.png`,
+  bulletLeft: `${resourceBase}png/projectiles/bullet_left.png`,
+  bulletRight: `${resourceBase}png/projectiles/bullet_right.png`,
+}
+
+// 子弹方向编号对应图片：0 上、1 下、2 左、3 右
+export const bulletAssets: Record<number, string> = {
+  0: gameAssets.bulletUp,
+  1: gameAssets.bulletDown,
+  2: gameAssets.bulletLeft,
+  3: gameAssets.bulletRight,
 }
 
 // 地图中的整数对应图片地址

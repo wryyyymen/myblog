@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { drawMap, type GameMapData } from '@/game/mapLoader'
-import { createPlayerRenderer,type PlayerState, } from '@/game/playRenderer'
+import { createBulletRenderer, createPlayerRenderer,type PlayerState, } from '@/game/playRenderer'
 import { bindDirectionKeys } from '@/game/keyboardInput'
 import { movePlayer } from '@/game/playerMovement'
 import { gameMap, TILE_SIZE } from '@/game/map'
+import {
+  advanceBullets,
+  createBullet,
+  FIRE_COOLDOWN_MS,
+  MAX_BULLETS_PER_PLAYER,
+  removeOutOfBounds,
+  type BulletData,
+} from '@/game/bullet'
 
 // 保存画布元素和页面加载状态
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -77,6 +85,9 @@ onMounted(async () => {
     // 初始化绘制器，图片只在初始化时加载
     const playerRenderer = await createPlayerRenderer(context)
 
+    // 子弹绘制器：一次加载四个方向的图，之后复用
+    const bulletRenderer = await createBulletRenderer(context)
+
     // 定义玩家初始位置和显示尺寸
     // 使用 PlayerState 检查玩家字段和方向编号
     const player: PlayerState = {
@@ -98,6 +109,15 @@ onMounted(async () => {
     // 坐标显示上次刷新的时间，避免每帧都触发 Vue 重渲染
     let lastHudUpdate = 0
 
+    // 场上所有子弹，每帧推进后重建数组
+    let bullets: BulletData[] = []
+
+    // 开火键是否按住。按住就持续尝试开火，实际能不能发由冷却决定
+    let fireHeld = false
+
+    // 上一次成功开火的时间戳，用来判断冷却
+    let lastFireTime = 0
+
     // 每帧执行：先推进位置，再重绘
     const renderScene = (timestamp: number): void => {
       // 页面离开后，停止继续绘制
@@ -117,6 +137,24 @@ onMounted(async () => {
         player.y = next.y
       }
 
+      // 按住空格且冷却已过，就生成一颗子弹
+      if (fireHeld && timestamp - lastFireTime >= FIRE_COOLDOWN_MS) {
+        // 场上属于本地玩家的子弹还没到上限才允许开火
+        const mine = bullets.filter((item) => item.ownerId === 'local').length
+        if (mine < MAX_BULLETS_PER_PLAYER) {
+          bullets.push(createBullet(player, player.direction))
+          lastFireTime = timestamp
+        }
+      }
+
+      // 推进所有子弹，再删掉飞出画布的
+      bullets = advanceBullets(bullets, dt)
+      bullets = removeOutOfBounds(
+        bullets,
+        context.canvas.width,
+        context.canvas.height,
+      )
+
       // 清除上一帧
       context.clearRect(0, 0, context.canvas.width, context.canvas.height)
 
@@ -126,10 +164,15 @@ onMounted(async () => {
       // 根据玩家当前状态绘制坦克
       playerRenderer.draw(player)
 
+      // 子弹画在坦克之后，保证子弹不会被坦克挡住
+      for (const bullet of bullets) {
+        bulletRenderer.draw(bullet)
+      }
+
       // 每 100 毫秒更新一次坐标显示
       if (timestamp - lastHudUpdate >= 100) {
         lastHudUpdate = timestamp
-        hud.value = `x ${Math.round(player.x)}  y ${Math.round(player.y)}  朝向 ${DIRECTION_NAMES[player.direction]}`
+        hud.value = `x ${Math.round(player.x)}  y ${Math.round(player.y)}  朝向 ${DIRECTION_NAMES[player.direction]}  子弹 ${bullets.length}`
       }
 
       // 下一次浏览器刷新前，再次执行绘制
@@ -139,14 +182,21 @@ onMounted(async () => {
     // 接收移动输入变化。
     // 这里只记录方向，不直接改坐标——位置统一交给每帧的 movePlayer 计算。
     // 将来接入联机时，这个回调换成"向服务器发送按键"，循环里换成"读服务器坐标"。
-    releaseKeys = bindDirectionKeys(context.canvas, (direction) => {
-      currentDirection = direction
+    releaseKeys = bindDirectionKeys(
+      context.canvas,
+      (direction) => {
+        currentDirection = direction
 
-      // 停止输入时保留坦克朝向，避免将 null 传给绘制器
-      if (direction !== null) {
-        player.direction = direction
-      }
-    })
+        // 停止输入时保留坦克朝向，避免将 null 传给绘制器
+        if (direction !== null) {
+          player.direction = direction
+        }
+      },
+      (held) => {
+        // 只记录开火键状态，真正生成子弹在每帧的循环里判断
+        fireHeld = held
+      },
+    )
 
     // 初始化完成后，只启动一次循环；给一个起始时间戳
     renderScene(performance.now())
