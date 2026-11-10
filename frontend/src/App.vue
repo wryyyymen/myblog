@@ -44,6 +44,7 @@ const year = new Date().getFullYear()
         </RouterLink>
         <nav class="main-nav" aria-label="主导航">
           <RouterLink to="/">文章</RouterLink>
+          <RouterLink to="/game">游戏</RouterLink>
           <RouterLink to="/about">关于</RouterLink>
         </nav>
         <div class="header-actions">
