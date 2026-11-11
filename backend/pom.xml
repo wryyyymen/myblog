@@ -30,6 +30,11 @@
 		<java.version>17</java.version>
 	</properties>
 	<dependencies>
+		<!--引入webscoket-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-websocket</artifactId>
+		</dependency>
         <!-- 仅保留编辑器支持的安全 HTML 标签和属性 -->
         <dependency>
             <groupId>org.jsoup</groupId>

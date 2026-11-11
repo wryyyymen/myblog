@@ -20,9 +20,16 @@ Thumbs.db
 # Local database credentials; use the committed example when setting up
 /backend/src/main/resources/application.yaml
 /backend/src/main/resources/application-local.*
+/backend/models/
+/backend/native/robot_voice/.venv/
+__pycache__/
+*.pyc
 
 # Empty lockfile outside the actual frontend package
 /package-lock.json
 
 # 本地开发周报
 /docs/weekly-report-*.md
+
+# 本地课程作业
+/coursework/

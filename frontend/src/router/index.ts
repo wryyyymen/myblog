@@ -47,7 +47,13 @@ const router = createRouter({
       path: '/register',
       name: 'register',
       component: () => import('../views/RegisterView.vue'),
-    },{
+    },
+    {
+      path: '/game/ws-test',
+      name: 'websocket-test',
+      component: () => import('../views/WebSocketTestView.vue'),
+    },
+    {
       path: '/game',
       name: 'game',
       component: () => import('../views/GameView.vue'),

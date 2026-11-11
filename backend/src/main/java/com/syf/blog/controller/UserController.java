@@ -19,6 +19,10 @@ import org.springframework.web.bind.annotation.*;
  * 用户认证接口，提供注册、登录、查询当前用户和退出登录功能。
  *
  * <p>基础路径：{@code /api/auth}。登录身份保存在后端 Session 的 {@code loginUserId} 中。</p>
+ *
+ * <p>本类负责 JSON 参数绑定、参数校验及 HTTP 响应组织。
+ * 用户注册、密码和账号状态校验交由 {@link UserService} 完成；
+ * Session 的建立、读取及注销统一交由 {@link CurrentUserService} 完成。</p>
  */
 @Tag(name = "用户认证", description = "注册、Session 登录、当前用户和退出登录")
 @RestController
@@ -28,6 +32,8 @@ public class UserController {
     private final CurrentUserService currentUserService;
 
     /**
+     * 创建认证控制器，由 Spring 注入用户业务和会话管理组件。
+     *
      * @param userService 用户注册及凭据校验服务
      * @param currentUserService Session 身份及会话管理组件
      */
@@ -41,10 +47,13 @@ public class UserController {
      *
      * <p>请求：{@code POST /api/auth/register}，请求体格式为 JSON，允许匿名访问。
      * 注册成功仅创建账号，不建立登录会话。</p>
+     * <p>用户名由业务层去掉两端空白，并在保存前检查是否重名；
+     * 密码经 BCrypt 编码后保存，响应仅包含公开账号信息。</p>
      *
      * @param request JSON 请求体，包含用户名和至少 8 个字符的密码
      * @return 成功返回 201 和用户的 {@code id}、{@code username}；
-     *         参数校验失败返回 400；用户名已存在返回 409
+     *         参数校验失败返回 400；用户名预检查发现重名时返回 409
+     * @throws com.syf.blog.exception.BusinessException 保存前检查发现用户名已经存在
      */
     @Operation(
             summary = "注册账号",
@@ -66,11 +75,14 @@ public class UserController {
      *
      * <p>请求：{@code POST /api/auth/login}，请求体格式为 JSON，允许匿名访问。
      * 成功后更换 Session ID，并在 Session 中保存用户 ID。</p>
+     * <p>先由业务层完成凭据及账号状态校验，通过后再建立会话。
+     * 浏览器后续请求通过会话 Cookie 关联到该服务端 Session。</p>
      *
-     * @param request JSON 请求体，包含用户名和密码
+     * @param request JSON 请求体，包含用户名和密码；用户名查询时去掉两端空白，密码按原文校验
      * @param httpRequest 当前 HTTP 请求，用于创建或读取 Session 并更换会话 ID
      * @return 成功返回 200 和 {@code id}、{@code username}、{@code role}；
      *         参数校验失败返回 400；用户名或密码错误返回 401；账号停用返回 403
+     * @throws com.syf.blog.exception.BusinessException 用户名或密码不正确，或账号已停用
      */
     @Operation(
             summary = "用户登录",
@@ -95,10 +107,13 @@ public class UserController {
      *
      * <p>请求：{@code GET /api/auth/me}，需要有效且启用的登录账号。
      * 用户不存在或账号停用时使 Session 失效；此接口不会创建新 Session。</p>
+     * <p>通过 CurrentUserService 重新查询数据库，确保返回当前角色与账号状态；
+     * 响应 DTO 仅包含 ID、用户名和角色。</p>
      *
      * @param httpRequest 当前 HTTP 请求，用于读取 Session 中的 {@code loginUserId}
      * @return 成功返回 200 和 {@code id}、{@code username}、{@code role}；
      *         未登录、用户不存在或账号停用时返回 401
+     * @throws com.syf.blog.exception.BusinessException 未登录、登录用户已经删除或账号已经停用
      */
     @Operation(
             summary = "查询当前登录用户",
@@ -117,6 +132,8 @@ public class UserController {
      * 退出登录，使当前已有的 Session 失效。
      *
      * <p>请求：{@code POST /api/auth/logout}。未登录时调用也能成功，不创建新 Session。</p>
+     * <p>调用会话管理服务使整个现有 Session 及其中的登录属性失效。
+     * 已建立的 WebSocket 连接需要由连接管理逻辑另行联动关闭。</p>
      *
      * @param httpRequest 当前 HTTP 请求，用于查找并使已有 Session 失效
      * @return 204，响应体为空

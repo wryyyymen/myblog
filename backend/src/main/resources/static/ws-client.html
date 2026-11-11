@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket 练习</title>
+    <style>
+        body { max-width: 860px; margin: 32px auto; padding: 0 20px; font: 16px/1.6 system-ui, sans-serif; color: #243247; }
+        h1 { margin-bottom: 8px; font-size: 26px; }
+        code { overflow-wrap: anywhere; }
+        button, input { padding: 8px 12px; font: inherit; }
+        button { cursor: pointer; }
+        button:disabled { cursor: default; }
+        .controls, form { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+        input { min-width: 160px; flex: 1; }
+        #log { height: 320px; overflow-y: auto; padding: 12px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; list-style: none; }
+        #log li { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+        .received { color: #176045; }
+        .sent { color: #2456a0; }
+        .error { color: #b42318; }
+        .hint { color: #526176; }
+    </style>
+</head>
+<body>
+    <h1>WebSocket 练习</h1>
+    <p>连接地址：<code id="address"></code><br>当前状态：<strong id="status">未连接</strong></p>
+    <p class="hint">点击连接后，浏览器会自动发送 hello。服务端回复 echo，并每两秒主动推送一次时间。打开另一个标签页建立第二条连接：两个页面都会收到推送，echo 只回复发送消息的页面。</p>
+    <div class="controls">
+        <button id="connect" type="button">连接</button>
+        <button id="disconnect" type="button" disabled>断开</button>
+        <button id="clear" type="button">清空记录</button>
+    </div>
+    <form id="message-form">
+        <input id="message" aria-label="发送内容" value="hello" maxlength="2000" disabled>
+        <button id="send" type="submit" disabled>发送</button>
+    </form>
+    <p class="hint">记录保留最近 200 条；也可以在浏览器开发者工具的 Network → WS 中查看消息。</p>
+    <ol id="log" aria-label="消息记录" aria-live="polite"></ol>
+
+    <script>
+        const address = document.getElementById("address");
+        const status = document.getElementById("status");
+        const connectButton = document.getElementById("connect");
+        const disconnectButton = document.getElementById("disconnect");
+        const sendButton = document.getElementById("send");
+        const messageInput = document.getElementById("message");
+        const logList = document.getElementById("log");
+        const endpoint = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/myWs`;
+        let socket = null;
+
+        function log(type, text) {
+            const entry = document.createElement("li");
+            entry.className = type;
+            const labels = { sent: "发送", received: "收到", info: "状态", error: "错误" };
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${labels[type]}：${text}`;
+            logList.appendChild(entry);
+            while (logList.children.length > 200) {
+                logList.firstElementChild.remove();
+            }
+            logList.scrollTop = logList.scrollHeight;
+        }
+
+        function updateControls() {
+            const open = socket?.readyState === WebSocket.OPEN;
+            connectButton.disabled = socket !== null || !location.host;
+            disconnectButton.disabled = !socket || socket.readyState === WebSocket.CLOSING;
+            sendButton.disabled = !open;
+            messageInput.disabled = !open;
+        }
+
+        function send(text) {
+            if (socket?.readyState !== WebSocket.OPEN) {
+                log("error", "连接尚未建立，无法发送消息");
+                return;
+            }
+            try {
+                socket.send(text);
+                log("sent", text);
+            } catch (error) {
+                log("error", error.message);
+            }
+        }
+
+        connectButton.addEventListener("click", () => {
+            if (socket) return;
+            status.textContent = "连接中";
+            log("info", `开始连接 ${endpoint}`);
+            try {
+                socket = new WebSocket(endpoint);
+            } catch (error) {
+                status.textContent = "连接失败";
+                log("error", error.message);
+                updateControls();
+                return;
+            }
+            updateControls();
+
+            socket.onopen = () => {
+                status.textContent = "已连接";
+                log("info", "连接已建立");
+                updateControls();
+                send("hello");
+                messageInput.focus();
+            };
+            socket.onmessage = event => log("received", event.data);
+            socket.onerror = () => log("error", "连接发生错误，请检查后端是否启动及浏览器控制台");
+            socket.onclose = event => {
+                socket = null;
+                status.textContent = "已断开";
+                log("info", `连接关闭，code=${event.code}，reason=${event.reason || "无"}`);
+                updateControls();
+            };
+        });
+
+        disconnectButton.addEventListener("click", () => {
+            if (!socket) return;
+            status.textContent = "断开中";
+            socket.close(1000, "用户主动断开");
+            updateControls();
+        });
+        document.getElementById("message-form").addEventListener("submit", event => {
+            event.preventDefault();
+            if (messageInput.value.length > 0) send(messageInput.value);
+        });
+        document.getElementById("clear").addEventListener("click", () => logList.replaceChildren());
+        window.addEventListener("pagehide", () => socket?.close());
+
+        address.textContent = location.host ? endpoint : "请访问 http://localhost:8081/ws-client.html";
+        if (!location.host) {
+            status.textContent = "请通过后端地址打开页面";
+            log("error", "请先启动后端，再访问 http://localhost:8081/ws-client.html");
+        }
+        updateControls();
+    </script>
+</body>
+</html>

@@ -16,8 +16,13 @@ public record UserResponse(
         @Schema(description = "角色", allowableValues = {"USER", "ADMIN"}) String role
 ) {
     /**
-     * @param user 后端查询得到的用户实体
-     * @return 仅包含公开字段的响应
+     * 将数据库中的用户转换成登录、当前用户接口使用的公开响应。
+     *
+     * <p>仅映射 ID、用户名和角色，响应不包含实体中的密码哈希。
+     * 账号存在性和启用状态由调用方在转换前检查。
+     *
+     * @param user 后端查询并确认有效的用户实体，调用方应保证非空
+     * @return 仅包含公开字段的响应，角色直接取自实体的 roleCode
      */
     public static UserResponse from(BlogUser user) {
         return new UserResponse(user.getId(), user.getUsername(), user.getRoleCode());

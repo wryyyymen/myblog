@@ -45,6 +45,7 @@ const year = new Date().getFullYear()
         <nav class="main-nav" aria-label="主导航">
           <RouterLink to="/">文章</RouterLink>
           <RouterLink to="/about">关于</RouterLink>
+          <RouterLink to="/game/ws-test">WS 测试</RouterLink>
         </nav>
         <div class="header-actions">
           <span v-if="auth.loading" class="header-status" role="status">正在加载登录状态……</span>
