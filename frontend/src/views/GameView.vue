@@ -4,9 +4,11 @@ import { drawMap, type GameMapData } from '@/game/mapLoader'
 import { createBulletRenderer, createPlayerRenderer,type PlayerState, } from '@/game/playRenderer'
 import { bindDirectionKeys } from '@/game/keyboardInput'
 import { movePlayer } from '@/game/playerMovement'
+import { blocksBullet } from '@/game/collision'
 import { gameMap, TILE_SIZE } from '@/game/map'
 import {
   advanceBullets,
+  BULLET_SIZE,
   createBullet,
   FIRE_COOLDOWN_MS,
   MAX_BULLETS_PER_PLAYER,
@@ -197,10 +199,17 @@ onMounted(async () => {
 
       // 按住方向键时才推进，松手后坐标保持不变
       if (currentDirection !== null) {
-        const next = movePlayer(player, currentDirection, dt, {
-          width: context.canvas.width,
-          height: context.canvas.height,
-        })
+        const next = movePlayer(
+          player,
+          currentDirection,
+          dt,
+          {
+            width: context.canvas.width,
+            height: context.canvas.height,
+          },
+          // 传入本局地图，movePlayer 用它判断目标格是不是墙
+          map,
+        )
         player.x = next.x
         player.y = next.y
       }
@@ -221,6 +230,12 @@ onMounted(async () => {
         bullets,
         context.canvas.width,
         context.canvas.height,
+      )
+
+      // 打到砖墙或钢墙的子弹立即消失。
+      // 首版不破坏砖块，墙体破坏交给服务端的碰撞规则处理。
+      bullets = bullets.filter(
+        (bullet) => !blocksBullet(map, bullet.x, bullet.y, BULLET_SIZE),
       )
 
       // 清除上一帧
