@@ -102,6 +102,15 @@ public class GameMessageController {
         public GameWsResponse<RoomResponse> createRoom(Principal principal){
                 //从连接身份读用户 ID
                 String userIdText = principal.getName();
-                
+
+                // UserPrincipal.getName() 返回的是用户 ID 的字符串形式
+                Long userId = Long.valueOf(userIdText);
+
+                // 交给房间服务创建房间；同一用户重复请求会复用原来的房间
+                RoomResponse room = gameRoomService.createRoom(userId);
+
+                // 按设计文档第 6 节，房间操作的结果统一用 command:result 确认。
+                // 当前消息结构还没有 requestId 字段，等结构补齐后再一并返回
+                return new GameWsResponse<RoomResponse>("command:result", room);
         }
 }
