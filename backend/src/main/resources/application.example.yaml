@@ -11,3 +11,12 @@ spring:
       ddl-auto: update
 server:
   port: 8081
+robot:
+  tcp:
+    enabled: ${ROBOT_TCP_ENABLED:false}
+    bind-address: ${ROBOT_TCP_BIND_ADDRESS:0.0.0.0}
+    port: ${ROBOT_TCP_PORT:54321}
+    allowed-remote-address: ${ROBOT_TCP_ALLOWED_REMOTE_ADDRESS:}
+  worker:
+    host: ${ROBOT_WORKER_HOST:127.0.0.1}
+    port: ${ROBOT_WORKER_PORT:54322}

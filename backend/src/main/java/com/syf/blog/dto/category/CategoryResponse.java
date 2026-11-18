@@ -24,7 +24,11 @@ public record CategoryResponse(
         @Schema(description = "更新时间") LocalDateTime updatedAt
 ) {
     /**
-     * @param category 数据库查询得到的分类实体
+     * 将分类实体映射为接口响应，保留分类状态与数据库记录的时间。
+     *
+     * <p>此方法只进行字段转换；是否仅返回启用分类由调用方的查询决定。
+     *
+     * @param category 数据库查询得到的分类实体，调用方应保证非空
      * @return 与现有分类接口字段一致的响应
      */
     public static CategoryResponse from(Category category) {

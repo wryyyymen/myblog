@@ -18,8 +18,11 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 文章业务：组织查询、发布、编辑、删除，并检查文章操作权限。
- * 登录身份由 CurrentUserService 从 Session 和数据库取得后传入。
+ * 文章业务服务，负责文章查询、发布、编辑、删除及资源操作权限检查。
+ *
+ * <p>写操作接收调用方通过 CurrentUserService 确认的登录用户，
+ * 作者身份来自服务端；编辑和删除仅允许文章作者或管理员执行。
+ * 类级别默认使用只读事务，发布、编辑、删除方法分别开启写事务。
  */
 @Service
 @Transactional(readOnly = true)
@@ -27,18 +30,28 @@ public class ArticleService {
     private final ArticleRepository articles;
     private final ArticleContentService articleContentService;
 
+    /**
+     * 创建文章业务服务，由 Spring 注入文章数据访问和正文处理组件。
+     *
+     * @param articles 文章 Repository，用于查询、保存、删除及刷新数据库变更
+     * @param articleContentService 正文格式解析、有效内容校验和 HTML 清理服务
+     */
     public ArticleService(ArticleRepository articles, ArticleContentService articleContentService) {
         this.articles = articles;
         this.articleContentService = articleContentService;
     }
 
     /**
-     * 发布文章，作者使用已验证的登录用户。
+     * 在写事务中发布文章，并将当前登录用户记录为作者。
      *
-     * @param request 已通过接口参数校验的文章数据
+     * <p>标题去掉两端空白；正文按请求格式校验并清理；
+     * 分类和封面取自请求。保存时主动刷新数据库，
+     * 将本方法捕获到的数据库约束冲突转换为业务异常。
+     *
+     * @param request 已通过接口参数校验的文章数据，包含标题、正文、分类、封面和可选正文格式
      * @param loginUser 从服务端会话获取的有效用户，不能使用客户端提交的用户对象
-     * @return 保存后的文章
-     * @throws BusinessException 身份无效时为 401，数据库约束不满足时为 400
+     * @return 保存后的文章实体，包含数据库生成的文章 ID
+     * @throws BusinessException 身份无效时携带 401；正文无有效内容或本方法捕获到数据库约束冲突时携带 400
      */
     @Transactional
     public Article create(CreateArticleRequest request, BlogUser loginUser) {
@@ -61,13 +74,17 @@ public class ArticleService {
     }
 
     /**
-     * 修改文章标题和正文。
+     * 在写事务中修改文章标题、正文及正文格式。
+     *
+     * <p>先检查登录身份、文章是否存在及管理员/作者权限，
+     * 再规范标题、处理正文并刷新保存。未传正文格式时按 TEXT 处理。
      *
      * @param id 文章 ID
      * @param request 已通过接口参数校验的修改内容
      * @param loginUser 服务端确认的当前用户
-     * @return 修改后的文章，原作者和分类保持原值
-     * @throws BusinessException 身份无效为 401，无操作权限为 403，文章不存在为 404
+     * @return 修改后的文章实体，作者、分类和封面保持原值
+     * @throws BusinessException 身份无效时携带 401，无操作权限时携带 403，
+     *                          文章不存在时携带 404，正文无有效内容时携带 400
      */
     @Transactional
     public Article update(Long id, UpdateArticleRequest request, BlogUser loginUser) {
@@ -81,12 +98,15 @@ public class ArticleService {
     }
 
     /**
-     * 删除文章；关联评论或收藏触发的约束异常转换为业务提示。
+     * 在写事务中删除文章，仅允许文章作者或管理员操作。
+     *
+     * <p>删除后主动刷新数据库。删除或刷新触发数据库约束冲突时，
+     * 转换为“文章仍有评论或收藏，无法删除”的 409 业务异常；失败事务回滚。
      *
      * @param id 文章 ID
      * @param loginUser 服务端确认的当前用户
-     * @throws BusinessException 身份无效为 401，无操作权限为 403，
-     *                          文章不存在为 404，存在关联数据为 409
+     * @throws BusinessException 身份无效时携带 401，无操作权限时携带 403，
+     *                          文章不存在时携带 404，捕获到数据库约束冲突时携带 409
      */
     @Transactional
     public void delete(Long id, BlogUser loginUser) {
@@ -105,10 +125,10 @@ public class ArticleService {
     }
 
     /**
-     * 查询不分页的文章列表。
+     * 公开查询不分页的文章列表，可按分类筛选。
      *
-     * @param categoryId 可选分类 ID；省略时按创建时间降序，指定时沿用原来的升序
-     * @return 匹配的文章，没有匹配数据时为空列表
+     * @param categoryId 可选分类 ID；为 null 时查询全部并按创建时间降序，指定时按该分类下文章的创建时间升序
+     * @return 匹配的文章列表；没有匹配文章时为空列表，也不会因分类没有匹配数据而抛出 404
      */
     public List<Article> list(Long categoryId) {
         return categoryId == null
@@ -117,23 +137,25 @@ public class ArticleService {
     }
 
     /**
-     * 查询文章详情，不增加浏览量。
+     * 公开查询单篇文章详情，查询过程不增加浏览量。
      *
      * @param id 文章 ID
-     * @return 文章；不存在时返回空 Optional，由接口返回空响应体的 404
+     * @return 包含匹配文章的 Optional；不存在时返回 Optional.empty，由调用方组织未找到响应
      */
     public Optional<Article> detail(Long id) {
         return articles.findById(id);
     }
 
     /**
-     * 分页查询文章，按创建时间及 ID 倒序。
+     * 公开分页查询文章，可按分类筛选，按创建时间及 ID 倒序排列。
+     *
+     * <p>排序中的 ID 用于区分创建时间相同的文章；查询结果为空时正常返回空页。
      *
      * @param page 从 0 开始的页码
      * @param size 每页数量，范围 1～100
-     * @param categoryId 可选分类 ID
-     * @return 含文章数据和分页信息的结果
-     * @throws BusinessException 分页参数不合法时为 400
+     * @param categoryId 可选分类 ID，为 null 时查询全部分类
+     * @return 含当前页文章、总条数及分页信息的 Page 对象
+     * @throws BusinessException 页码小于 0，或每页数量不在 1～100 之间时抛出，携带 400 状态
      */
     public Page<Article> page(int page, int size, Long categoryId) {
         if (page < 0 || size < 1 || size > 100) {
@@ -148,19 +170,40 @@ public class ArticleService {
                 : articles.findByCategoryId(categoryId, pageable);
     }
 
+    /**
+     * 按 ID 取得必须存在的文章，供编辑和删除流程复用。
+     *
+     * @param id 需要操作的文章 ID
+     * @return 数据库中的文章实体
+     * @throws BusinessException 文章不存在时抛出，携带 404 状态
+     */
     private Article requireArticle(Long id) {
         return articles.findById(id)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "文章不存在"));
     }
 
-    /** 操作权限放在业务层，所有调用方都必须经过检查。 */
+    /**
+     * 检查当前用户是否为管理员或文章作者。
+     *
+     * @param user 已经通过登录有效性检查的用户
+     * @param article 本次需要编辑或删除的文章
+     * @param message 无权限时向客户端展示的业务提示
+     * @throws BusinessException 用户既非管理员也非作者时抛出，携带 403 状态
+     */
     private void requireManagePermission(BlogUser user, Article article, String message) {
         if (!"ADMIN".equals(user.getRoleCode()) && !user.getId().equals(article.getAuthorId())) {
             throw new BusinessException(HttpStatus.FORBIDDEN, message);
         }
     }
 
-    /** 防止业务方法被其他服务以空身份或停用账号调用。 */
+    /**
+     * 检查业务方法接收的用户对象是否具有可用身份。
+     *
+     * <p>该方法检查传入对象的 ID 和启用状态；调用方应先通过服务端会话取得可信用户。
+     *
+     * @param user 调用方传入的当前用户
+     * @throws BusinessException 用户为 null、ID 为 null 或账号未启用时抛出，携带 401 状态
+     */
     private void requireActiveUser(BlogUser user) {
         if (user == null || user.getId() == null || !Boolean.TRUE.equals(user.getEnabled())) {
             throw new BusinessException(HttpStatus.UNAUTHORIZED, "请先登录或登录状态已失效");

@@ -12,24 +12,39 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 用户业务：注册、密码校验及登录资格检查。会话操作由 auth 包负责。 */
+/**
+ * 用户业务服务，负责注册、密码校验和账号登录资格检查。
+ *
+ * <p>返回对象仅包含允许公开的用户字段。查询默认使用只读事务，
+ * 注册方法单独开启写事务；会话的建立、读取和注销集中在 auth 包。
+ */
 @Service
 @Transactional(readOnly = true)
 public class UserService {
     private final BlogUserRepository users;
     private final PasswordEncoder encoder;
 
+    /**
+     * 创建用户服务，由 Spring 注入用户数据访问和密码编码组件。
+     *
+     * @param users 用户 Repository，用于检查重名、查询账号和保存注册数据
+     * @param encoder 密码编码器，负责注册时编码密码、登录时验证密码与哈希是否匹配
+     */
     public UserService(BlogUserRepository users, PasswordEncoder encoder) {
         this.users = users;
         this.encoder = encoder;
     }
 
     /**
-     * 注册默认启用的普通用户，密码编码后保存。
+     * 在写事务中注册默认启用、角色为 USER 的普通用户。
      *
-     * @param request 已通过参数校验的用户名和密码
-     * @return 用户 ID 和用户名，不包含密码或密码哈希
-     * @throws BusinessException 用户名已存在时返回 409
+     * <p>用户名去掉两端空白后检查是否已存在；密码编码后再保存，
+     * 使用 saveAndFlush 立即刷新数据库变更。注册成功后由调用方决定后续页面流程。
+     *
+     * @param request 已通过接口参数校验的用户名和明文密码
+     * @return 新用户的 ID 和用户名，不包含明文密码或密码哈希
+     * @throws BusinessException 重名查询发现用户名已存在时抛出，携带 409 状态
+     * @throws org.springframework.dao.DataIntegrityViolationException 保存时触发唯一性等数据库约束冲突时抛出
      */
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
@@ -44,11 +59,14 @@ public class UserService {
     }
 
     /**
-     * 校验登录凭据及账号状态，不在此方法中建立 HTTP 会话。
+     * 验证登录用户名、密码和账号启用状态。
      *
-     * @param request 已通过参数校验的用户名和密码
+     * <p>按去掉两端空白后的用户名查询账号，使用密码编码器验证密码。
+     * 校验成功后返回公开用户信息，调用方可据此交给 auth 包建立登录会话。
+     *
+     * @param request 已通过接口参数校验的用户名和明文密码
      * @return 登录用户的公开信息；角色来自数据库
-     * @throws BusinessException 凭据错误为 401，账号停用为 403
+     * @throws BusinessException 用户不存在或密码不匹配时携带 401，账号未启用时携带 403
      */
     public UserResponse authenticate(LoginRequest request) {
         BlogUser user = users.findByUsername(request.username().trim()).orElse(null);

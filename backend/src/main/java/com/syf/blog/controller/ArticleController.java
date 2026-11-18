@@ -24,6 +24,11 @@ import java.util.Map;
  * 文章接口，提供发布、编辑、删除、详情、列表和分页查询功能。
  *
  * <p>基础路径：{@code /api/articles}。查询接口允许匿名访问；写入接口使用 Session 验证身份。</p>
+ *
+ * <p>本类负责请求参数绑定、触发 DTO 校验和组织 HTTP 响应。
+ * 写入操作先由 {@link CurrentUserService} 取得可信登录用户，
+ * 再交给 {@link ArticleService} 检查文章权限、处理正文并执行事务。
+ * 可预期的业务失败由全局异常处理器转换成对应状态码和 {@code message} 提示。</p>
  */
 @Tag(name = "文章管理", description = "文章查询、发布、编辑和删除")
 @RestController
@@ -33,6 +38,8 @@ public class ArticleController {
     private final CurrentUserService currentUserService;
 
     /**
+     * 创建文章控制器，由 Spring 注入文章业务和登录身份服务。
+     *
      * @param articleService 文章业务服务
      * @param currentUserService 基于 Session 的当前用户查询组件
      */
@@ -45,11 +52,14 @@ public class ArticleController {
      * 发布文章，并将当前登录用户设为作者。
      *
      * <p>请求：{@code POST /api/articles}，请求体格式为 JSON。需要有效且启用的登录账号。</p>
+     * <p>标题保存时去掉两端空白；正文交由业务层按 {@code contentFormat} 处理，
+     * 格式省略时使用 {@code TEXT}。作者由登录身份决定。</p>
      *
-     * @param request JSON 请求体，包含标题、正文、分类 ID 和可选封面地址
+     * @param request JSON 请求体，包含标题、正文、分类 ID、可选封面地址及正文格式
      * @param httpRequest 当前 HTTP 请求，用于从 Session 获取登录用户
      * @return 成功返回 201 和文章的 {@code id}、{@code title}；
      *         参数校验失败或数据不符合数据库约束时返回 400；登录状态无效时返回 401
+     * @throws com.syf.blog.exception.BusinessException 登录身份失效、正文不合法或保存时违反数据库约束
      */
     @Operation(
             summary = "发布文章",
@@ -70,16 +80,19 @@ public class ArticleController {
     }
 
     /**
-     * 修改指定文章的标题和正文。
+     * 修改指定文章的标题、正文和正文格式。
      *
      * <p>请求：{@code PUT /api/articles/{id}}，请求体格式为 JSON。
      * 仅启用的管理员或文章作者本人可以操作。</p>
+     * <p>文章是否存在以及当前用户能否编辑，由业务层检查。
+     * 作者、分类和封面沿用原值；正文格式省略时按 {@code TEXT} 处理。</p>
      *
      * @param id 路径参数，待修改的文章 ID
-     * @param request JSON 请求体，包含修改后的标题和正文
-     * @param httpRequest 当前 HTTP 请求，用于读取 Session 并核查用户权限
+     * @param request JSON 请求体，包含修改后的标题、正文及正文格式
+     * @param httpRequest 当前 HTTP 请求，用于取得可信登录用户，再交由业务层核查文章权限
      * @return 成功返回 200 和文章的 {@code id}、{@code title}；参数校验失败返回 400；
      *         登录状态无效返回 401；没有权限返回 403；文章不存在返回 404
+     * @throws com.syf.blog.exception.BusinessException 登录身份失效、文章不存在、无编辑权限或正文不合法
      */
     @Operation(
             summary = "编辑文章",
@@ -108,7 +121,8 @@ public class ArticleController {
      * 未指定分类时按创建时间降序；指定分类时按当前仓库方法的创建时间升序返回。</p>
      *
      * @param categoryId 可选查询参数，分类 ID；省略时查询全部文章
-     * @return 200 和文章对象数组；没有匹配文章时返回空数组
+     * @return 200 和文章对象数组；分类不存在或没有匹配文章时返回空数组；
+     *         分类 ID 无法转换为 Long 时，由参数绑定流程返回 400
      */
     @Operation(
             summary = "查询文章列表",
@@ -130,7 +144,8 @@ public class ArticleController {
      * <p>请求：{@code GET /api/articles/{id}}，允许匿名访问。此接口只查询，不增加浏览量。</p>
      *
      * @param id 路径参数，待查询的文章 ID
-     * @return 文章存在时返回 200 和文章对象；不存在时返回 404，响应体为空
+     * @return 文章存在时返回 200 和文章对象；不存在时返回 404，响应体为空；
+     *         路径中的 ID 无法转换为 Long 时，由参数绑定流程返回 400
      */
     @Operation(
             summary = "查询文章详情",
@@ -153,9 +168,10 @@ public class ArticleController {
      * 仅启用的管理员或文章作者本人可以操作；存在评论或收藏关联时无法删除。</p>
      *
      * @param id 路径参数，待删除的文章 ID
-     * @param httpRequest 当前 HTTP 请求，用于读取 Session 并核查用户权限
+     * @param httpRequest 当前 HTTP 请求，用于取得可信登录用户，再交由业务层核查文章权限
      * @return 成功返回 204，响应体为空；登录状态无效返回 401；没有权限返回 403；
      *         文章不存在返回 404；删除触发数据库完整性约束时返回 409
+     * @throws com.syf.blog.exception.BusinessException 登录身份失效、文章不存在、无删除权限或文章仍有关联数据
      */
     @Operation(
             summary = "删除文章",
@@ -182,6 +198,8 @@ public class ArticleController {
      *
      * <p>请求：{@code GET /api/articles/page}，允许匿名访问。
      * 按创建时间降序排列，创建时间相同时按文章 ID 降序排列。</p>
+     * <p>分页范围由业务层校验；没有匹配文章时返回空的 {@code content} 数组，
+     * 并保留页码、每页数量及总数信息。</p>
      *
      * @param page 查询参数，页码，从 0 开始，默认 0，不能小于 0
      * @param size 查询参数，每页数量，默认 5，范围为 1 到 100
@@ -189,6 +207,7 @@ public class ArticleController {
      * @return 成功返回 200，包含 {@code content}（本页文章）、{@code page}（页码）、
      *         {@code size}（每页数量）、{@code totalElements}（文章总数）和
      *         {@code totalPages}（总页数）；分页参数不合法时返回 400
+     * @throws com.syf.blog.exception.BusinessException 页码小于 0，或每页数量超出 1～100 的范围
      */
     @Operation(
             summary = "分页查询文章",
