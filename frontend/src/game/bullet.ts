@@ -11,8 +11,10 @@ export const BULLET_SIZE = 12
 // 开火冷却时间，单位毫秒。冷却期内按空格不产生新子弹。
 export const FIRE_COOLDOWN_MS = 300
 
-// 同一玩家场上同时存在的子弹上限。首版只允许一颗。
-export const MAX_BULLETS_PER_PLAYER = 1
+// 同一玩家场上同时存在的子弹上限。
+// 改这个数必须同步改后端 GameParams.MAX_BULLETS_PER_PLAYER，
+// 否则联机时客户端预测和服务端判定会不一致。
+export const MAX_BULLETS_PER_PLAYER = 3
 
 // 方向编号到单位位移的映射，和前端的移动、绘制共用同一套 0~3 编号。
 const DELTA: Record<0 | 1 | 2 | 3, { dx: number; dy: number }> = {

@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 子弹规则的单元测试，不启动 Spring、不连接数据库。
  *
  * <p>期望值按前端常量手算：子弹 12 像素、坦克 24 像素、
- * 子弹速度 240 像素/秒、冷却 300 毫秒、每人最多 1 颗。
+ * 子弹速度 240 像素/秒、冷却 300 毫秒、每人最多 3 颗。
  */
 class BulletRulesTest {
 
@@ -122,9 +122,15 @@ class BulletRulesTest {
     }
 
     @Test
+    void allowsFireWhileUnderBulletLimit() {
+        // 上限 3 颗，场上有 2 颗时冷却已过仍可继续开火
+        assertTrue(BulletRules.canFire(2, 0L, 10_000L));
+    }
+
+    @Test
     void rejectsFireWhenBulletLimitReached() {
-        // 场上已有一颗自己的子弹，冷却再久也不能再发
-        assertFalse(BulletRules.canFire(1, 0L, 10_000L));
+        // 场上已有 3 颗，达到上限，冷却再久也不能再发
+        assertFalse(BulletRules.canFire(3, 0L, 10_000L));
     }
 
     @Test

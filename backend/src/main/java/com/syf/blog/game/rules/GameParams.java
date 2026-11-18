@@ -22,8 +22,12 @@ public final class GameParams {
     /** 开火冷却时间，单位毫秒，对应前端 bullet.ts 的 FIRE_COOLDOWN_MS。 */
     public static final long FIRE_COOLDOWN_MILLIS = 300L;
 
-    /** 同一玩家场上同时存在的子弹上限，对应 MAX_BULLETS_PER_PLAYER。 */
-    public static final int MAX_BULLETS_PER_PLAYER = 1;
+    /**
+     * 同一玩家场上同时存在的子弹上限，对应前端 MAX_BULLETS_PER_PLAYER。
+     *
+     * <p>改这个数必须同时改前端 bullet.ts，否则联机时客户端预测会被服务端否决。
+     */
+    public static final int MAX_BULLETS_PER_PLAYER = 3;
 
     /** 一格地图的边长，对应数据库 game_map 表的 tile_size。 */
     public static final double DEFAULT_TILE_SIZE = 24;
