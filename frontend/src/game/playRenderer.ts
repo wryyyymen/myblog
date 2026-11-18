@@ -1,4 +1,5 @@
-import { gameAssets } from './assets'
+import { bulletAssets, gameAssets } from './assets'
+import { BULLET_SIZE, type BulletData } from './bullet'
 
 // 玩家状态，由页面或后续游戏逻辑维护
 export interface PlayerState {
@@ -36,6 +37,35 @@ export async function createPlayerRenderer(
       frameSize, frameSize,         // 截取一帧
       player.x, player.y,           // 画布中的位置
       player.size, player.size,     // 显示尺寸
+      )
+    },
+  }
+}
+
+// 初始化子弹绘制器，一次加载四张方向图
+export async function createBulletRenderer(
+  context: CanvasRenderingContext2D,
+) {
+  // 四个方向各一张图，并发加载，全部完成后才返回
+  const images = await Promise.all(
+    [0, 1, 2, 3].map(async (direction) => {
+      const image = new Image()
+      image.src = bulletAssets[direction]!
+      await image.decode()
+      return image
+    }),
+  )
+
+  return {
+    // 绘制单颗子弹：按方向选图，按坐标贴图
+    draw(bullet: BulletData): void {
+      context.imageSmoothingEnabled = false
+      context.drawImage(
+        images[bullet.direction]!,
+        bullet.x,
+        bullet.y,
+        BULLET_SIZE,
+        BULLET_SIZE,
       )
     },
   }

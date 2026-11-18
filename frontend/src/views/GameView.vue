@@ -1,10 +1,27 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { drawMap, type GameMapData } from '@/game/mapLoader'
-import { createPlayerRenderer,type PlayerState, } from '@/game/playRenderer'
+import { createBulletRenderer, createPlayerRenderer,type PlayerState, } from '@/game/playRenderer'
 import { bindDirectionKeys } from '@/game/keyboardInput'
 import { movePlayer } from '@/game/playerMovement'
+import { blocksBullet } from '@/game/collision'
 import { gameMap, TILE_SIZE } from '@/game/map'
+import {
+  advanceBullets,
+  BULLET_SIZE,
+  createBullet,
+  FIRE_COOLDOWN_MS,
+  MAX_BULLETS_PER_PLAYER,
+  removeOutOfBounds,
+  type BulletData,
+} from '@/game/bullet'
+import {
+  LOCAL_PLAYER_ID,
+  toResultView,
+  type GameOverData,
+  type ResultViewModel,
+} from '@/game/result'
+import ResultPanel from '@/components/ResultPanel.vue'
 
 // 保存画布元素和页面加载状态
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -16,6 +33,67 @@ const hud = ref('')
 
 // 方向编号转成中文，只给坐标显示用
 const DIRECTION_NAMES = ['上', '下', '左', '右'] as const
+
+// 结算面板的数据。null 表示没有结算，面板不显示
+const result = ref<ResultViewModel | null>(null)
+
+// 错误提示。有值时结算面板显示错误而不是胜负
+const resultError = ref<string | null>(null)
+
+// 开发阶段预览结算界面用的样例数据。
+// 接入联机后删掉这一段，改为处理服务端下发的 game_over 消息。
+const DEMO_RESULTS: GameOverData[] = [
+  {
+    winnerId: LOCAL_PLAYER_ID,
+    stats: [
+      { playerId: LOCAL_PLAYER_ID, hits: 3, damage: 3 },
+      { playerId: 'remote', hits: 1, damage: 1 },
+    ],
+    durationSec: 47,
+    reason: 'destroyed',
+  },
+  {
+    winnerId: 'remote',
+    stats: [
+      { playerId: LOCAL_PLAYER_ID, hits: 1, damage: 1 },
+      { playerId: 'remote', hits: 3, damage: 3 },
+    ],
+    durationSec: 63,
+    reason: 'destroyed',
+  },
+  {
+    winnerId: null,
+    stats: [
+      { playerId: LOCAL_PLAYER_ID, hits: 2, damage: 2 },
+      { playerId: 'remote', hits: 2, damage: 2 },
+    ],
+    durationSec: 38,
+    reason: 'draw',
+  },
+]
+
+let demoIndex = 0
+
+// 按 K 依次预览胜利、失败、平局三种结算样式
+function handleDemoKey(event: KeyboardEvent): void {
+  if (event.code !== 'KeyK') return
+  const data = DEMO_RESULTS[demoIndex % DEMO_RESULTS.length]!
+  demoIndex++
+  resultError.value = null
+  result.value = toResultView(data)
+}
+
+// 再来一局：只关掉面板。真实联机时这里要发 room:rematch 给服务端
+function handleRematch(): void {
+  result.value = null
+  resultError.value = null
+}
+
+// 返回大厅：真实联机时这里要跳转到大厅路由
+function handleLeave(): void {
+  result.value = null
+  resultError.value = null
+}
 
 // 保存解除键盘绑定的方法
 let releaseKeys: (() => void) | undefined
@@ -77,6 +155,9 @@ onMounted(async () => {
     // 初始化绘制器，图片只在初始化时加载
     const playerRenderer = await createPlayerRenderer(context)
 
+    // 子弹绘制器：一次加载四个方向的图，之后复用
+    const bulletRenderer = await createBulletRenderer(context)
+
     // 定义玩家初始位置和显示尺寸
     // 使用 PlayerState 检查玩家字段和方向编号
     const player: PlayerState = {
@@ -98,6 +179,15 @@ onMounted(async () => {
     // 坐标显示上次刷新的时间，避免每帧都触发 Vue 重渲染
     let lastHudUpdate = 0
 
+    // 场上所有子弹，每帧推进后重建数组
+    let bullets: BulletData[] = []
+
+    // 开火键是否按住。按住就持续尝试开火，实际能不能发由冷却决定
+    let fireHeld = false
+
+    // 上一次成功开火的时间戳，用来判断冷却
+    let lastFireTime = 0
+
     // 每帧执行：先推进位置，再重绘
     const renderScene = (timestamp: number): void => {
       // 页面离开后，停止继续绘制
@@ -109,13 +199,44 @@ onMounted(async () => {
 
       // 按住方向键时才推进，松手后坐标保持不变
       if (currentDirection !== null) {
-        const next = movePlayer(player, currentDirection, dt, {
-          width: context.canvas.width,
-          height: context.canvas.height,
-        })
+        const next = movePlayer(
+          player,
+          currentDirection,
+          dt,
+          {
+            width: context.canvas.width,
+            height: context.canvas.height,
+          },
+          // 传入本局地图，movePlayer 用它判断目标格是不是墙
+          map,
+        )
         player.x = next.x
         player.y = next.y
       }
+
+      // 按住空格且冷却已过，就生成一颗子弹
+      if (fireHeld && timestamp - lastFireTime >= FIRE_COOLDOWN_MS) {
+        // 场上属于本地玩家的子弹还没到上限才允许开火
+        const mine = bullets.filter((item) => item.ownerId === 'local').length
+        if (mine < MAX_BULLETS_PER_PLAYER) {
+          bullets.push(createBullet(player, player.direction))
+          lastFireTime = timestamp
+        }
+      }
+
+      // 推进所有子弹，再删掉飞出画布的
+      bullets = advanceBullets(bullets, dt)
+      bullets = removeOutOfBounds(
+        bullets,
+        context.canvas.width,
+        context.canvas.height,
+      )
+
+      // 打到砖墙或钢墙的子弹立即消失。
+      // 首版不破坏砖块，墙体破坏交给服务端的碰撞规则处理。
+      bullets = bullets.filter(
+        (bullet) => !blocksBullet(map, bullet.x, bullet.y, BULLET_SIZE),
+      )
 
       // 清除上一帧
       context.clearRect(0, 0, context.canvas.width, context.canvas.height)
@@ -126,10 +247,15 @@ onMounted(async () => {
       // 根据玩家当前状态绘制坦克
       playerRenderer.draw(player)
 
+      // 子弹画在坦克之后，保证子弹不会被坦克挡住
+      for (const bullet of bullets) {
+        bulletRenderer.draw(bullet)
+      }
+
       // 每 100 毫秒更新一次坐标显示
       if (timestamp - lastHudUpdate >= 100) {
         lastHudUpdate = timestamp
-        hud.value = `x ${Math.round(player.x)}  y ${Math.round(player.y)}  朝向 ${DIRECTION_NAMES[player.direction]}`
+        hud.value = `x ${Math.round(player.x)}  y ${Math.round(player.y)}  朝向 ${DIRECTION_NAMES[player.direction]}  子弹 ${bullets.length}`
       }
 
       // 下一次浏览器刷新前，再次执行绘制
@@ -139,14 +265,21 @@ onMounted(async () => {
     // 接收移动输入变化。
     // 这里只记录方向，不直接改坐标——位置统一交给每帧的 movePlayer 计算。
     // 将来接入联机时，这个回调换成"向服务器发送按键"，循环里换成"读服务器坐标"。
-    releaseKeys = bindDirectionKeys(context.canvas, (direction) => {
-      currentDirection = direction
+    releaseKeys = bindDirectionKeys(
+      context.canvas,
+      (direction) => {
+        currentDirection = direction
 
-      // 停止输入时保留坦克朝向，避免将 null 传给绘制器
-      if (direction !== null) {
-        player.direction = direction
-      }
-    })
+        // 停止输入时保留坦克朝向，避免将 null 传给绘制器
+        if (direction !== null) {
+          player.direction = direction
+        }
+      },
+      (held) => {
+        // 只记录开火键状态，真正生成子弹在每帧的循环里判断
+        fireHeld = held
+      },
+    )
 
     // 初始化完成后，只启动一次循环；给一个起始时间戳
     renderScene(performance.now())
@@ -159,6 +292,11 @@ onMounted(async () => {
     // 无论成功还是失败，都结束加载状态
     loading.value = false
   }
+})
+
+// 开发阶段用来预览结算界面；接入联机后移除这个监听
+onMounted(() => {
+  window.addEventListener('keydown', handleDemoKey)
 })
 
 //页面离开时触发
@@ -174,6 +312,9 @@ onUnmounted(() => {
 
   // 解除键盘监听
   releaseKeys?.()
+
+  // 移除结算预览的监听
+  window.removeEventListener('keydown', handleDemoKey)
 })
 
 
@@ -189,16 +330,27 @@ onUnmounted(() => {
   </p>
   <!-- 坐标显示：确认坦克真的在动，也方便对照代码里的计算 -->
   <p v-if="!loading && !errorMessage" class="hud" role="status">{{ hud }}</p>
-  <canvas
-    ref="canvasRef"
-    width="960"
-    height="624"
-    tabindex="0"
-    aria-label="坦克大战，使用方向键或 WASD 移动"
-    @pointerdown="canvasRef?.focus()"
-  >
-    当前浏览器不支持 Canvas。
-  </canvas>
+  <div class="canvas-wrap">
+    <canvas
+      ref="canvasRef"
+      width="960"
+      height="624"
+      tabindex="0"
+      aria-label="坦克大战，使用方向键或 WASD 移动，空格开火"
+      @pointerdown="canvasRef?.focus()"
+    >
+      当前浏览器不支持 Canvas。
+    </canvas>
+
+    <!-- 结算面板：覆盖在画布上，有结果或错误时才出现 -->
+    <ResultPanel
+      :result="result"
+      :error="resultError"
+      :can-rematch="true"
+      @rematch="handleRematch"
+      @leave="handleLeave"
+    />
+  </div>
   </main>
 </template>
 
@@ -211,13 +363,21 @@ onUnmounted(() => {
   color: #526176;
 }
 
+.canvas-wrap {
+  position: relative;
+  max-width: 960px;
+  margin: 20px auto 0;
+}
+
 canvas {
   display: block;
   width: 100%;
 
   height: auto;
+  /* canvas 是替换元素，只写 height:auto 时高度会取内在尺寸 624px 而不是按比例缩放，
+     结果画布被横向拉伸。用 aspect-ratio 锁死 960:624 的原始比例。 */
+  aspect-ratio: 960 / 624;
   max-width: 960px;
-  margin: 20px auto 0;
   background: #000;
   image-rendering: pixelated;
 }
