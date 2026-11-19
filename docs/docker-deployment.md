@@ -60,6 +60,8 @@ systemctl reload nginx
 
 当前 `stefanblog.top` 由 `/www/server/nginx/sbin/nginx` 管理，实际站点配置位于 `/www/server/panel/vhost/nginx/stefanblog.top.conf`，它已包含 `extension/stefanblog.top/*.conf`。此时保留原域名和证书配置，把 `deploy/nginx/myblog-websocket.conf` 安装为 `/www/server/panel/vhost/nginx/extension/stefanblog.top/tank-websocket.conf`，使用该 Nginx 的 `-t` 和 `-s reload`，不要用另一套 systemd Nginx 替换 HTTPS 站点。
 
+浏览器使用 HTTPS 访问站点，Nginx 通过本机 HTTP 转发到后端。`myblog-websocket.conf` 保留原 `Host`，并用 `X-Forwarded-Proto $scheme` 告诉后端外部协议。Compose 的 `SERVER_FORWARD_HEADERS_STRATEGY=native` 让 Tomcat 读取来自本机代理的转发头，把请求协议和端口还原为 HTTPS 和 443；这样 `Origin: https://stefanblog.top` 才能通过 WebSocket 的同源检查。后端继续只监听 `127.0.0.1`，不同来源的连接仍会被拒绝。
+
 WS 学习源码仍由 Git 管理。本地 Vite 显示 `/game/ws-test`；生产前端不注册该路由或导航，容器也不携带 `ws-client.html`，Compose 使用 `DEMO_WEBSOCKET_ENABLED=false` 关闭 `/myWs` 示例及定时任务。Nginx 对学习页面和 `/myWs` 返回 404，仅放行正式坦克联机的 `/ws/`。
 
 ### 首次部署坦克地图表
