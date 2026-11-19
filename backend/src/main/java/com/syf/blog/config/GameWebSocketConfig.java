@@ -2,12 +2,18 @@ package com.syf.blog.config;
 
 import com.syf.blog.auth.GameHandshakeHandler;
 import com.syf.blog.auth.GameHandshakeInterceptor;
+import com.syf.blog.websocket.game.GameMessageChannelInterceptor;
+import com.syf.blog.websocket.game.GameSocketTransportDecoratorFactory;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 import org.springframework.web.socket.config.annotation.StompWebSocketEndpointRegistration;
+import org.springframework.web.socket.config.annotation.WebSocketTransportRegistration;
 
 /**
  * 游戏 STOMP 端点、业务消息目标和内存消息代理的配置。
@@ -71,6 +77,32 @@ public class GameWebSocketConfig implements WebSocketMessageBrokerConfigurer {
     }
 
     /**
+     * 注册客户端入站检查；消息通过检查后，才继续进入 Controller 或内存代理。
+     */
+    @Override
+    public void configureClientInboundChannel(ChannelRegistration registration) {
+        GameMessageChannelInterceptor interceptor = new GameMessageChannelInterceptor();
+        registration.interceptors(interceptor);
+    }
+
+    /** 独立的代理心跳线程，由 Spring 在应用关闭时释放。 */
+    @Bean
+    public ThreadPoolTaskScheduler gameBrokerHeartbeatScheduler() {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(1);
+        scheduler.setThreadNamePrefix("game-broker-heartbeat-");
+        return scheduler;
+    }
+
+    @Override
+    public void configureWebSocketTransport(WebSocketTransportRegistration registration) {
+        registration.addDecoratorFactory(new GameSocketTransportDecoratorFactory());
+        registration.setMessageSizeLimit(8 * 1024);
+        registration.setSendBufferSizeLimit(64 * 1024);
+        registration.setSendTimeLimit(5_000);
+    }
+
+    /**
      * 配置业务指令前缀以及内置内存消息代理。
      *
      * <p>
@@ -86,6 +118,9 @@ public class GameWebSocketConfig implements WebSocketMessageBrokerConfigurer {
         registry.setApplicationDestinationPrefixes("/app");
 
         // 使用 Spring 内置的内存消息代理，管理订阅和推送
-        registry.enableSimpleBroker("/topic", "/queue");
+        registry.setPreservePublishOrder(true);
+        registry.enableSimpleBroker("/topic", "/queue")
+                .setHeartbeatValue(new long[] {5_000L, 5_000L})
+                .setTaskScheduler(gameBrokerHeartbeatScheduler());
     }
 }

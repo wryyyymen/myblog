@@ -2,7 +2,7 @@
 import AppIcon from '@/components/AppIcon.vue'
 import BlogArtwork from '@/components/BlogArtwork.vue'
 import { ref } from 'vue'
-import { useRouter, RouterLink } from 'vue-router'
+import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const username = ref('')
@@ -11,6 +11,7 @@ const message = ref('')
 const loading = ref(false)
 const isError = ref(false)
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 
 async function handleSubmit() {
@@ -62,8 +63,19 @@ async function handleSubmit() {
 
     password.value = ''
 
-    // 登录成功后回到首页
-    await router.push({ name: 'home' })
+    // 仅允许站内已定义路由，联机登录后回到原页面，避免外部地址跳转。
+    const redirect = route.query.redirect
+    if (
+      typeof redirect === 'string' &&
+      redirect.startsWith('/') &&
+      !redirect.startsWith('//') &&
+      !redirect.includes('\\') &&
+      router.resolve(redirect).matched.length > 0
+    ) {
+      await router.push(redirect)
+    } else {
+      await router.push({ name: 'home' })
+    }
   } catch {
     isError.value = true
     message.value = '无法连接后端，请确认后端已在 8081 端口启动'

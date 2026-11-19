@@ -9,3 +9,5 @@ mvnw.cmd
 .env.*
 src/main/resources/application.yaml
 src/main/resources/application-local.*
+# Keep the learning page in Git, but exclude it from production images.
+src/main/resources/static/ws-client.html

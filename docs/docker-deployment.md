@@ -45,6 +45,8 @@ apt-get install -y nginx
 bash deploy/build-frontend.sh
 install -d -m 755 /var/www/myblog
 cp -a frontend/dist/. /var/www/myblog/
+install -d -m 755 /etc/nginx/snippets
+cp deploy/nginx/myblog-websocket.conf /etc/nginx/snippets/myblog-websocket.conf
 cp deploy/nginx/myblog.conf /etc/nginx/sites-available/myblog
 ln -sfn /etc/nginx/sites-available/myblog /etc/nginx/sites-enabled/myblog
 rm -f /etc/nginx/sites-enabled/default
@@ -53,6 +55,16 @@ systemctl reload nginx
 ```
 
 前端使用相对路径 `/api/...`；Nginx 将这些请求转发到本机后端 `127.0.0.1:8081`，其余路径作为 Vue 页面处理。访问文章详情等地址时，`try_files` 会返回前端的 `index.html`。更新前端后重新运行构建脚本，并复制新的 `dist` 文件，再重载 Nginx。
+
+### 已有宝塔 HTTPS 站点
+
+当前 `stefanblog.top` 由 `/www/server/nginx/sbin/nginx` 管理，实际站点配置位于 `/www/server/panel/vhost/nginx/stefanblog.top.conf`，它已包含 `extension/stefanblog.top/*.conf`。此时保留原域名和证书配置，把 `deploy/nginx/myblog-websocket.conf` 安装为 `/www/server/panel/vhost/nginx/extension/stefanblog.top/tank-websocket.conf`，使用该 Nginx 的 `-t` 和 `-s reload`，不要用另一套 systemd Nginx 替换 HTTPS 站点。
+
+WS 学习源码仍由 Git 管理。本地 Vite 显示 `/game/ws-test`；生产前端不注册该路由或导航，容器也不携带 `ws-client.html`，Compose 使用 `DEMO_WEBSOCKET_ENABLED=false` 关闭 `/myWs` 示例及定时任务。Nginx 对学习页面和 `/myWs` 返回 404，仅放行正式坦克联机的 `/ws/`。
+
+### 首次部署坦克地图表
+
+现有生产库缺少 `game_map` 时，先在服务器备份数据库，再执行 `backend/scripts/2026-11-19-game-map.sql`。脚本只创建新表，并在地图 1 不存在时加入默认地图；不修改现有博客文章、用户或已有地图。继续保持 `ddl-auto=validate` 和 `spring.sql.init.mode=never`。
 
 ## 公网访问
 

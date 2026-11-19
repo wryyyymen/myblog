@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import AppIcon from '@/components/AppIcon.vue'
 import { onMounted, ref } from 'vue'
-import { RouterLink, RouterView, useRouter } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 const logoutError = ref('')
+// WebSocket 学习页面只在本地开发时提供入口。
+const showWebSocketTest = import.meta.env.DEV
 
 async function handleLogout() {
   if (auth.loggingOut) return
@@ -45,7 +48,8 @@ const year = new Date().getFullYear()
         <nav class="main-nav" aria-label="主导航">
           <RouterLink to="/">文章</RouterLink>
           <RouterLink to="/about">关于</RouterLink>
-          <RouterLink to="/game/ws-test">WS 测试</RouterLink>
+          <RouterLink to="/game">坦克大战</RouterLink>
+          <RouterLink v-if="showWebSocketTest" to="/game/ws-test">WS 测试</RouterLink>
         </nav>
         <div class="header-actions">
           <span v-if="auth.loading" class="header-status" role="status">正在加载登录状态……</span>
@@ -85,7 +89,14 @@ const year = new Date().getFullYear()
     </p>
     <div id="main-content" class="page-body" tabindex="-1">
       <!-- 等登录状态查询结束，再显示当前页面。 -->
-      <RouterView v-if="!auth.loading" />
+      <RouterView
+        v-if="
+          !auth.loading ||
+          route.name === 'game' ||
+          route.name === 'game-single' ||
+          route.name === 'game-single-result'
+        "
+      />
       <div v-else class="boot-state" role="status">正在打开博客，请稍候……</div>
     </div>
     <footer class="site-footer">
