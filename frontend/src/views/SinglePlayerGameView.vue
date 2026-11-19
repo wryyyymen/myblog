@@ -293,7 +293,7 @@ onUnmounted(() => {
     <p v-if="errorMessage" class="notice notice-error" role="alert">{{ errorMessage }}</p>
     <div class="solo-layout">
       <section class="solo-battle" aria-label="单人坦克战场">
-        <BattleFrame :hud="battleHud">
+        <BattleFrame :hud="battleHud" :active="!showingResult">
           <canvas
             ref="canvasRef"
             width="624"
@@ -439,7 +439,10 @@ onUnmounted(() => {
   background: #050b08b8;
 }
 .overlay-card {
-  max-width: 340px;
+  min-width: 0;
+  max-width: min(340px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
   padding: 30px 24px;
   text-align: center;
   border: 1px solid #66816588;
@@ -467,7 +470,8 @@ onUnmounted(() => {
 }
 .play-button {
   margin-top: 22px;
-  min-width: 150px;
+  min-width: min(150px, 100%);
+  max-width: 100%;
 }
 .solo-sidebar {
   display: grid;
@@ -543,6 +547,21 @@ kbd {
   }
   .overlay-card h2 {
     font-size: 25px;
+  }
+}
+@media (max-height: 600px) {
+  .game-overlay {
+    padding: 10px;
+  }
+  .overlay-card {
+    padding: 18px 16px;
+  }
+  .overlay-card h2 {
+    margin: 8px 0;
+    font-size: 23px;
+  }
+  .play-button {
+    margin-top: 12px;
   }
 }
 </style>

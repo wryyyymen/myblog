@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { GameResult } from '@/game/results'
 import GameAudioControls from '@/components/GameAudioControls.vue'
 
@@ -23,7 +23,15 @@ const props = withDefaults(
 )
 defineEmits<{ retry: []; lobby: []; menu: [] }>()
 const titleRef = ref<HTMLHeadingElement | null>(null)
-onMounted(() => titleRef.value?.focus())
+function focusTitle() {
+  if (!document.fullscreenElement) titleRef.value?.focus()
+}
+onMounted(() => {
+  focusTitle()
+  // 原生全屏退出是异步的，退出完成后再把键盘焦点交给结算标题。
+  document.addEventListener('fullscreenchange', focusTitle)
+})
+onUnmounted(() => document.removeEventListener('fullscreenchange', focusTitle))
 
 const title = computed(() => {
   if (!props.result) return '暂无结算记录'

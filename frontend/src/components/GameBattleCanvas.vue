@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import BattleFrame from '@/components/BattleFrame.vue'
 import type { BattleHudState } from '@/game/battleHud'
 import type { PlayerState } from '@/game/playRenderer'
@@ -52,6 +52,14 @@ interface BulletTransition {
 }
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+// 显示缩放沿用地图长宽比，画布内部坐标和联机状态不变。
+const battlefieldAspectRatio = computed(() => {
+  const seed = props.initialization?.map.seed
+  const rows = seed?.length ?? 0
+  const columns = seed?.[0]?.length ?? 0
+  if (rows === 0 || columns === 0) return 1
+  return columns / rows
+})
 const loading = ref(false)
 const focused = ref(false)
 const resourcesReady = ref(false)
@@ -493,7 +501,7 @@ onUnmounted(() => {
     </p>
     <p v-else-if="state?.status === 'FINISHED'" class="canvas-note">本局已结束，最终战场已保留。</p>
     <p v-else class="canvas-note">开局后在这里控制你的坦克。</p>
-    <BattleFrame :hud="hud">
+    <BattleFrame :hud="hud" :aspect-ratio="battlefieldAspectRatio">
       <canvas
         ref="canvasRef"
         width="624"
