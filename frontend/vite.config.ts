@@ -6,20 +6,18 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [
-    vue(),
-    vueDevTools(),
-  ],
+  plugins: [vue(), vueDevTools()],
   server: {
+    host: '0.0.0.0',
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8081',
         changeOrigin: true,
       },
       '/ws': {
-      target: 'ws://127.0.0.1:8081',
-      ws: true,
-      changeOrigin: false,
+        target: 'ws://127.0.0.1:8081',
+        ws: true,
+        changeOrigin: false,
       },
     },
   },

@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
+    "test:game": "node --test scripts/test-singleplayer.mjs scripts/test-network-protocol.mjs scripts/test-interpolation.mjs scripts/test-game-results.mjs scripts/test-audio-events.mjs",
     "lint": "run-s \"lint:*\"",
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix --cache",

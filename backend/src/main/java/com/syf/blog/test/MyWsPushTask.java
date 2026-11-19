@@ -1,5 +1,6 @@
 package com.syf.blog.test;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -7,6 +8,8 @@ import java.time.Instant;
 
 /** 演示服务端主动发送消息，不需要浏览器先发请求。 */
 @Component
+// 与示例端点使用同一开关，关闭示例后也不再创建推送任务。
+@ConditionalOnProperty(prefix = "demo.websocket", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class MyWsPushTask {
     private final MyWsHandler myWsHandler;
 

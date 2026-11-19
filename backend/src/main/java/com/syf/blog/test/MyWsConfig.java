@@ -1,5 +1,6 @@
 package com.syf.blog.test;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
@@ -8,6 +9,8 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 
 /** 注册 WebSocket 地址，并启用学习示例中的定时推送。 */
 @Configuration(proxyBeanMethods = false)
+// 未配置时保留本地教学；生产环境显式设置 demo.websocket.enabled=false。
+@ConditionalOnProperty(prefix = "demo.websocket", name = "enabled", havingValue = "true", matchIfMissing = true)
 @EnableWebSocket
 @EnableScheduling
 public class MyWsConfig implements WebSocketConfigurer {

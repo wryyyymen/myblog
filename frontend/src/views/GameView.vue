@@ -1,390 +1,1492 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
-import { drawMap, type GameMapData } from '@/game/mapLoader'
-import { createBulletRenderer, createPlayerRenderer,type PlayerState, } from '@/game/playRenderer'
-import { bindDirectionKeys } from '@/game/keyboardInput'
-import { movePlayer } from '@/game/playerMovement'
-import { blocksBullet } from '@/game/collision'
-import { gameMap, TILE_SIZE } from '@/game/map'
+import { Client } from '@stomp/stompjs'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
+import GameBattleCanvas from '@/components/GameBattleCanvas.vue'
+import type { BattleHudState, BattleHudPlayer } from '@/game/battleHud'
+import { useAuthStore } from '@/stores/auth'
+import { loadGameResult, saveGameResult, type GameResult } from '@/game/results'
+import { unlockGameAudio, observeOnlineGameAudio, stopGameAudio } from '@/game/audio/gameAudio'
 import {
-  advanceBullets,
-  BULLET_SIZE,
-  createBullet,
-  FIRE_COOLDOWN_MS,
-  MAX_BULLETS_PER_PLAYER,
-  removeOutOfBounds,
-  type BulletData,
-} from '@/game/bullet'
-import {
-  LOCAL_PLAYER_ID,
-  toResultView,
-  type GameOverData,
-  type ResultViewModel,
-} from '@/game/result'
-import ResultPanel from '@/components/ResultPanel.vue'
+  isObject,
+  readGameEnd,
+  readGameInit,
+  readGameState,
+  readRoom,
+  readRoomLeft,
+  readAvailableRooms,
+  type AvailableRoom,
+  type Direction,
+  type GameInitialization,
+  type GameSnapshot,
+  type RoomSnapshot,
+} from '@/game/network/protocol'
 
-// 保存画布元素和页面加载状态
-const canvasRef = ref<HTMLCanvasElement | null>(null)
-const loading = ref(true)
+type ConnectionStatus = 'idle' | 'connecting' | 'reconnecting' | 'connected' | 'closing' | 'closed'
+type ActionKind = 'create' | 'join' | 'ready' | 'start' | 'leave' | 'sync' | 'rematch'
+interface PendingAction {
+  kind: ActionKind
+  roomId: string | null
+  version: number
+  sentAt: number
+}
+
+const auth = useAuthStore()
+const route = useRoute()
+const router = useRouter()
+const isResultRoute = computed(() => route.name === 'game-online-result')
+const settlement = shallowRef<GameResult | null>(null)
+const displayedSettlement = computed(() =>
+  settlement.value?.matchId === route.params.matchId ? settlement.value : null,
+)
+const availableRooms = shallowRef<AvailableRoom[]>([])
+const roomsLoading = ref(false)
+const roomsError = ref('')
+let lastRoomListRequest = 0
+let exitDestination: 'lobby' | 'menu' | null = null
+const connection = ref<ConnectionStatus>('idle')
+const room = shallowRef<RoomSnapshot | null>(null)
+const initialization = shallowRef<GameInitialization | null>(null)
+const gameState = shallowRef<GameSnapshot | null>(null)
+const resourcesReady = ref(false)
+const roomCode = ref(typeof route.query.roomId === 'string' ? route.query.roomId.slice(0, 36) : '')
+const pending = ref<PendingAction | null>(null)
 const errorMessage = ref('')
+const notice = ref('创建房间，邀请另一位玩家加入。')
+const receivedAt = ref(0)
+const clock = ref(Date.now())
+const recoveringRoom = ref(false)
+const reconnectAttempts = ref(0)
+const copyMessage = ref('')
+const lastResultSummary = ref('')
+const endpoint = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/tankgame`
 
-// 画布上方显示的坐标，用来直观确认坦克确实在移动
-const hud = ref('')
-
-// 方向编号转成中文，只给坐标显示用
-const DIRECTION_NAMES = ['上', '下', '左', '右'] as const
-
-// 结算面板的数据。null 表示没有结算，面板不显示
-const result = ref<ResultViewModel | null>(null)
-
-// 错误提示。有值时结算面板显示错误而不是胜负
-const resultError = ref<string | null>(null)
-
-// 开发阶段预览结算界面用的样例数据。
-// 接入联机后删掉这一段，改为处理服务端下发的 game_over 消息。
-const DEMO_RESULTS: GameOverData[] = [
-  {
-    winnerId: LOCAL_PLAYER_ID,
-    stats: [
-      { playerId: LOCAL_PLAYER_ID, hits: 3, damage: 3 },
-      { playerId: 'remote', hits: 1, damage: 1 },
-    ],
-    durationSec: 47,
-    reason: 'destroyed',
-  },
-  {
-    winnerId: 'remote',
-    stats: [
-      { playerId: LOCAL_PLAYER_ID, hits: 1, damage: 1 },
-      { playerId: 'remote', hits: 3, damage: 3 },
-    ],
-    durationSec: 63,
-    reason: 'destroyed',
-  },
-  {
-    winnerId: null,
-    stats: [
-      { playerId: LOCAL_PLAYER_ID, hits: 2, damage: 2 },
-      { playerId: 'remote', hits: 2, damage: 2 },
-    ],
-    durationSec: 38,
-    reason: 'draw',
-  },
-]
-
-let demoIndex = 0
-
-// 按 K 依次预览胜利、失败、平局三种结算样式
-function handleDemoKey(event: KeyboardEvent): void {
-  if (event.code !== 'KeyK') return
-  const data = DEMO_RESULTS[demoIndex % DEMO_RESULTS.length]!
-  demoIndex++
-  resultError.value = null
-  result.value = toResultView(data)
-}
-
-// 再来一局：只关掉面板。真实联机时这里要发 room:rematch 给服务端
-function handleRematch(): void {
-  result.value = null
-  resultError.value = null
-}
-
-// 返回大厅：真实联机时这里要跳转到大厅路由
-function handleLeave(): void {
-  result.value = null
-  resultError.value = null
-}
-
-// 保存解除键盘绑定的方法
-let releaseKeys: (() => void) | undefined
-
-// 保存动画请求编号，离开页面时取消
-let animationId: number | null = null
-
-// 标记页面是否已经离开，避免异步加载完成后继续绑定事件
+let client: Client | null = null
 let disposed = false
+let inputTimer: ReturnType<typeof setInterval> | undefined
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+let manualDisconnect = false
+let recoveryStartedAt = 0
+let desiredDirection: Direction | null = null
+let desiredFire = false
+let sequence = 0
+const leftVersions = new Map<string, number>()
+const retiredMatches = new Set<string>()
+let initRoomVersion = 0
 
-//页面挂载后触发
-onMounted(async () => {
+const connected = computed(
+  () => connection.value === 'connected' && auth.user !== null && !auth.loggingOut,
+)
+const canConnect = computed(
+  () =>
+    auth.user !== null &&
+    !auth.loggingOut &&
+    (connection.value === 'idle' || connection.value === 'closed'),
+)
+const canChooseRoom = computed(
+  () => connected.value && !recoveringRoom.value && room.value === null && pending.value === null,
+)
+const canChangeRoom = computed(
+  () => connected.value && !recoveringRoom.value && room.value !== null && pending.value === null,
+)
+const isReady = computed(
+  () => auth.user !== null && room.value?.readyUserIds.includes(auth.user.id) === true,
+)
+const isOwner = computed(() => auth.user !== null && room.value?.ownerUserId === auth.user.id)
+const allReady = computed(
+  () =>
+    room.value?.memberUserIds.length === 2 &&
+    room.value.readyUserIds.length === 2 &&
+    room.value.connectedUserIds.length === 2,
+)
+const disconnectedMembers = computed(
+  () =>
+    room.value?.memberUserIds.filter((userId) => !room.value?.connectedUserIds.includes(userId)) ??
+    [],
+)
+const canStart = computed(
+  () => canChangeRoom.value && isOwner.value && allReady.value && room.value?.status === 'WAITING',
+)
+const canRematch = computed(
+  () =>
+    canChangeRoom.value &&
+    isOwner.value &&
+    room.value?.status === 'FINISHED' &&
+    room.value.memberUserIds.length === 2,
+)
+const playing = computed(
+  () =>
+    connected.value &&
+    resourcesReady.value &&
+    initialization.value !== null &&
+    gameState.value?.matchId === initialization.value.matchId &&
+    gameState.value.status === 'PLAYING' &&
+    room.value?.status === 'PLAYING' &&
+    gameState.value.tanks.some((tank) => tank.userId === auth.user?.id && tank.hp > 0) &&
+    room.value?.roomId === initialization.value.roomId,
+)
+const connectionText = computed(
+  () =>
+    ({
+      idle: '未连接',
+      connecting: '连接中',
+      reconnecting: `正在重连（${reconnectAttempts.value}/5）`,
+      connected: '已连接',
+      closing: '断开中',
+      closed: '已断开',
+    })[connection.value],
+)
+const phaseText = computed(() => {
+  if (room.value?.status === 'FINISHED' || gameState.value?.status === 'FINISHED')
+    return '本局已结束'
+  if (playing.value) return '游戏进行中'
+  if (room.value?.status === 'LOADING') return '双方加载中'
+  if (
+    gameState.value?.status === 'PLAYING' &&
+    gameState.value.tanks.some((tank) => tank.userId === auth.user?.id && tank.hp === 0)
+  )
+    return '坦克已被击毁，正在观战队友'
+  if (room.value?.status === 'PLAYING') return '正在恢复战场'
+  return '等待准备'
+})
+const finished = computed(() => gameState.value?.status === 'FINISHED')
+const resultNotice = computed(() => {
+  if (!connected.value) return connectionText.value + '，连接恢复后可继续操作。'
+  if (pending.value) return pendingText.value
+  if (room.value?.status === 'FINISHED' && !isOwner.value)
+    return '等待房主再来一局，也可以返回大厅。'
+  if (room.value?.status === 'WAITING') return '本局合作已结束，可以返回大厅重新组队。'
+  return ''
+})
+const resultTitle = computed(() => {
+  const state = gameState.value
+  if (!state || state.status !== 'FINISHED') return ''
+  if (state.mode === 'COOP') {
+    if (state.teamResult === 'VICTORY') return '合作胜利！'
+    if (state.teamResult === 'ABANDONED') return '合作已中止'
+    return '防守失败'
+  }
+  if (state.winnerUserId === null) return '本局平局'
+  return state.winnerUserId === auth.user?.id ? '你赢了！' : '本局失败'
+})
+const resultDescription = computed(() => {
+  const reason = gameState.value?.endReason
+  if (gameState.value?.mode === 'COOP') {
+    if (reason === 'ENEMIES_CLEARED') return '你们共同消灭了全部 8 辆敌军，成功守住基地。'
+    if (reason === 'BASE_DESTROYED') return '基地被敌军击毁。再来一局，一起守住防线。'
+    if (reason === 'TEAM_DESTROYED') return '两名玩家的坦克均被击毁。'
+    if (reason === 'TIME_LIMIT') return '时间已到，未能消灭全部敌军。'
+    if (reason === 'TEAMMATE_LEFT') return '队友退出了房间，本局合作中止。'
+    if (reason === 'TEAMMATE_DISCONNECTED') return '队友未在 15 秒内恢复连接，本局合作中止。'
+    return '本局合作已结束。'
+  }
+  if (reason === 'TIME_LIMIT') return '对局时间已到，双方握手言和。'
+  if (reason === 'DRAW') return '双方同时被击毁。'
+  if (reason === 'PLAYER_LEFT') return '有玩家主动退出，本局结束。'
+  if (reason === 'PLAYER_DISCONNECTED') return '玩家未在 15 秒内恢复连接，本局按断线结算。'
+  if (reason === 'ABANDONED') return '双方均已断线，本局中止。'
+  return gameState.value?.winnerUserId === auth.user?.id
+    ? '你击毁了对方的坦克。'
+    : '你的坦克已被击毁。'
+})
+const remainingTime = computed(() => {
+  const state = gameState.value
+  const init = initialization.value
+  if (!state || !init) return ''
+  const seconds = Math.max(
+    0,
+    Math.ceil((init.rules.matchDurationMillis - state.tick * init.rules.tickMillis) / 1000),
+  )
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+})
+const stateDelayed = computed(
+  () => playing.value && receivedAt.value > 0 && clock.value - receivedAt.value > 1500,
+)
+const battleHud = computed<BattleHudState | null>(() => {
+  const state = gameState.value
+  if (!state || !auth.user) return null
+  const players: BattleHudPlayer[] = []
+  const ownTank = state.tanks.find((tank) => tank.userId === auth.user?.id)
+  if (ownTank)
+    players.push({
+      role: 'self',
+      hp: ownTank.hp,
+      maxHp: initialization.value?.rules.initialHp ?? 3,
+      protected:
+        state.status === 'PLAYING' && ownTank.hp > 0 && state.tick < ownTank.shieldUntilTick,
+    })
+  for (const tank of state.tanks) {
+    if (tank.userId === auth.user.id) continue
+    players.push({
+      role: state.mode === 'COOP' ? 'teammate' : 'opponent',
+      hp: tank.hp,
+      maxHp: initialization.value?.rules.initialHp ?? 3,
+      protected: state.status === 'PLAYING' && tank.hp > 0 && state.tick < tank.shieldUntilTick,
+    })
+  }
+  return {
+    mode: state.mode === 'COOP' ? '双人合作 · 基地防线' : '双人对战',
+    players,
+    // 击毁数来自服务端权威快照，显示合作团队总分，不伪造个人击杀归属。
+    score: state.mode === 'COOP' ? state.enemyDefeated * 100 : null,
+    scoreLabel: '团队得分',
+    defeated: state.enemyDefeated,
+    enemyTotal: state.enemyTotal,
+    activeEnemies: state.enemies.filter((enemy) => enemy.hp > 0).length,
+    baseAlive: state.base?.alive ?? null,
+    clock: finished.value ? '本局结束' : `剩余 ${remainingTime.value}`,
+  }
+})
+const pendingText = computed(() => {
+  if (pending.value === null) return ''
+  const texts: Record<ActionKind, string> = {
+    create: '正在创建或恢复房间……',
+    join: '正在加入房间……',
+    ready: '正在更新准备状态……',
+    start: '正在开始游戏……',
+    leave: '正在退出房间……',
+    sync: '正在恢复战场……',
+    rematch: '正在准备下一局……',
+  }
+  return texts[pending.value.kind]
+})
+
+function rememberLeft(roomId: string, version: number) {
+  const previous = leftVersions.get(roomId)
+  if (previous !== undefined && previous >= version) return
+  leftVersions.delete(roomId)
+  leftVersions.set(roomId, version)
+  if (leftVersions.size > 50) {
+    const oldest = leftVersions.keys().next().value
+    if (oldest !== undefined) leftVersions.delete(oldest)
+  }
+}
+
+function retireMatch(matchId: string | null | undefined) {
+  if (!matchId) return
+  retiredMatches.add(matchId)
+  if (retiredMatches.size > 50) {
+    const oldest = retiredMatches.values().next().value
+    if (oldest !== undefined) retiredMatches.delete(oldest)
+  }
+}
+
+function resultStorageKey(): string {
+  return `tank:online:last-result:${auth.user?.id ?? 'anonymous'}`
+}
+
+function restoreSettlement() {
+  if (!auth.user || !isResultRoute.value) return
+  const saved = loadGameResult(resultStorageKey())
+  if (saved?.matchId === route.params.matchId) settlement.value = saved
+}
+
+function presentSettlement(snapshot: GameSnapshot) {
+  if (!auth.user || snapshot.status !== 'FINISHED') return
+  const ownTank = snapshot.tanks.find((tank) => tank.userId === auth.user?.id)
+  let outcome: GameResult['outcome']
+  if (snapshot.mode === 'COOP') outcome = snapshot.teamResult ?? 'ABANDONED'
+  else if (snapshot.winnerUserId === null) outcome = 'DRAW'
+  else outcome = snapshot.winnerUserId === auth.user.id ? 'VICTORY' : 'DEFEAT'
+  const result: GameResult = {
+    mode: snapshot.mode === 'COOP' ? 'coop' : 'pvp',
+    matchId: snapshot.matchId,
+    outcome,
+    reason: resultDescription.value,
+    score: snapshot.mode === 'COOP' ? snapshot.enemyDefeated * 100 : null,
+    defeated: snapshot.enemyDefeated,
+    enemyTotal: snapshot.enemyTotal,
+    elapsedSeconds: Math.floor(
+      (snapshot.tick * (initialization.value?.rules.tickMillis ?? 50)) / 1000,
+    ),
+    remainingHp: ownTank?.hp ?? 0,
+    maxHp: initialization.value?.rules.initialHp ?? 3,
+    baseAlive: snapshot.base?.alive ?? null,
+  }
+  settlement.value = result
+  saveGameResult(resultStorageKey(), result)
+  if (pending.value?.kind === 'leave' || exitDestination !== null) return
+  if (isResultRoute.value && route.params.matchId === snapshot.matchId) return
+  void router.replace({ name: 'game-online-result', params: { matchId: snapshot.matchId } })
+}
+
+function returnFromSettlement(destination: 'lobby' | 'menu') {
+  if (pending.value !== null) return
+  if (room.value !== null) {
+    if (!canChangeRoom.value) return
+    exitDestination = destination
+    leaveRoom()
+  } else void router.replace({ name: destination === 'menu' ? 'game' : 'game-online' })
+}
+
+function requestRoomList(force = false) {
+  if (!canChooseRoom.value || isResultRoute.value || (roomsLoading.value && !force)) return
+  const now = Date.now()
+  if (!force && now - lastRoomListRequest < 3000) return
+  roomsLoading.value = true
+  roomsError.value = ''
+  lastRoomListRequest = now
+  if (!publish('/app/room/list', {})) roomsLoading.value = false
+}
+
+function joinListedRoom(item: AvailableRoom) {
+  if (!canChooseRoom.value) return
+  roomCode.value = item.roomId
+  joinRoom()
+}
+
+function publish(destination: string, payload: object): boolean {
+  const activeClient = client
+  if (!connected.value || !activeClient?.connected) {
+    errorMessage.value = '请先连接游戏服务'
+    return false
+  }
   try {
-    // 页面挂载后取得画布的二维绘图工具
-    const context = canvasRef.value?.getContext('2d')
-    if (!context) {
-      throw new Error('无法初始化游戏画布')
-    }
-
-    // 请求地图；Vite 会将 /api 请求转发给后端
-    // 这里的 1 是数据库中的地图 ID
-    let map: GameMapData
-
-    try {
-      const response = await fetch('/api/game/maps/1')
-
-      // HTTP 错误需要手动检查
-      if (!response.ok) {
-        throw new Error(`地图请求失败，状态码：${response.status}`)
-      }
-
-      // 将响应 JSON 转成地图数据
-      map = await response.json()
-    } catch (error) {
-      // 后端或数据库还没准备好时，退回 map.ts 里的本地地图。
-      // 这样移动逻辑可以脱离后端单独验证，接回接口时只需删掉这个 catch。
-      console.warn('地图接口不可用，改用本地地图：', error)
-      map = {
-        id: 0,
-        name: '本地测试地图',
-        tileSize: TILE_SIZE,
-        seed: gameMap,
-      }
-    }
-
-   // 创建离屏画布，缓存地图背景
-    const mapCanvas = document.createElement('canvas')
-    mapCanvas.width = context.canvas.width
-    mapCanvas.height = context.canvas.height
-
-    const mapContext = mapCanvas.getContext('2d')
-    if (!mapContext) {
-      throw new Error('无法创建地图缓存')
-    }
-
-    // 地图只在初始化时逐格绘制到缓存中
-    await drawMap(mapContext, map)
-
-    // 初始化绘制器，图片只在初始化时加载
-    const playerRenderer = await createPlayerRenderer(context)
-
-    // 子弹绘制器：一次加载四个方向的图，之后复用
-    const bulletRenderer = await createBulletRenderer(context)
-
-    // 定义玩家初始位置和显示尺寸
-    // 使用 PlayerState 检查玩家字段和方向编号
-    const player: PlayerState = {
-      x: map.tileSize,
-      y: map.tileSize,
-      size: map.tileSize,
-      direction: 1, // 0上、1下、2左、3右
-    }
-
-    // 异步加载期间如果已经离开页面，就结束初始化
-    if (disposed) return
-
-    // 当前按住的方向；null 表示已经松手，坦克停下
-    let currentDirection: 0 | 1 | 2 | 3 | null = null
-
-    // 上一帧的时间戳，用来算两帧之间过了多久
-    let lastTimestamp = 0
-
-    // 坐标显示上次刷新的时间，避免每帧都触发 Vue 重渲染
-    let lastHudUpdate = 0
-
-    // 场上所有子弹，每帧推进后重建数组
-    let bullets: BulletData[] = []
-
-    // 开火键是否按住。按住就持续尝试开火，实际能不能发由冷却决定
-    let fireHeld = false
-
-    // 上一次成功开火的时间戳，用来判断冷却
-    let lastFireTime = 0
-
-    // 每帧执行：先推进位置，再重绘
-    const renderScene = (timestamp: number): void => {
-      // 页面离开后，停止继续绘制
-      if (disposed) return
-
-      // 换算成秒。第一帧没有上一帧，按 0 处理，坦克不会凭空移动。
-      const dt = lastTimestamp === 0 ? 0 : (timestamp - lastTimestamp) / 1000
-      lastTimestamp = timestamp
-
-      // 按住方向键时才推进，松手后坐标保持不变
-      if (currentDirection !== null) {
-        const next = movePlayer(
-          player,
-          currentDirection,
-          dt,
-          {
-            width: context.canvas.width,
-            height: context.canvas.height,
-          },
-          // 传入本局地图，movePlayer 用它判断目标格是不是墙
-          map,
-        )
-        player.x = next.x
-        player.y = next.y
-      }
-
-      // 按住空格且冷却已过，就生成一颗子弹
-      if (fireHeld && timestamp - lastFireTime >= FIRE_COOLDOWN_MS) {
-        // 场上属于本地玩家的子弹还没到上限才允许开火
-        const mine = bullets.filter((item) => item.ownerId === 'local').length
-        if (mine < MAX_BULLETS_PER_PLAYER) {
-          bullets.push(createBullet(player, player.direction))
-          lastFireTime = timestamp
-        }
-      }
-
-      // 推进所有子弹，再删掉飞出画布的
-      bullets = advanceBullets(bullets, dt)
-      bullets = removeOutOfBounds(
-        bullets,
-        context.canvas.width,
-        context.canvas.height,
-      )
-
-      // 打到砖墙或钢墙的子弹立即消失。
-      // 首版不破坏砖块，墙体破坏交给服务端的碰撞规则处理。
-      bullets = bullets.filter(
-        (bullet) => !blocksBullet(map, bullet.x, bullet.y, BULLET_SIZE),
-      )
-
-      // 清除上一帧
-      context.clearRect(0, 0, context.canvas.width, context.canvas.height)
-
-      // 复制缓存地图，无需重新遍历地图数据
-      context.drawImage(mapCanvas, 0, 0)
-
-      // 根据玩家当前状态绘制坦克
-      playerRenderer.draw(player)
-
-      // 子弹画在坦克之后，保证子弹不会被坦克挡住
-      for (const bullet of bullets) {
-        bulletRenderer.draw(bullet)
-      }
-
-      // 每 100 毫秒更新一次坐标显示
-      if (timestamp - lastHudUpdate >= 100) {
-        lastHudUpdate = timestamp
-        hud.value = `x ${Math.round(player.x)}  y ${Math.round(player.y)}  朝向 ${DIRECTION_NAMES[player.direction]}  子弹 ${bullets.length}`
-      }
-
-      // 下一次浏览器刷新前，再次执行绘制
-      animationId = requestAnimationFrame(renderScene)
-    }
-
-    // 接收移动输入变化。
-    // 这里只记录方向，不直接改坐标——位置统一交给每帧的 movePlayer 计算。
-    // 将来接入联机时，这个回调换成"向服务器发送按键"，循环里换成"读服务器坐标"。
-    releaseKeys = bindDirectionKeys(
-      context.canvas,
-      (direction) => {
-        currentDirection = direction
-
-        // 停止输入时保留坦克朝向，避免将 null 传给绘制器
-        if (direction !== null) {
-          player.direction = direction
-        }
-      },
-      (held) => {
-        // 只记录开火键状态，真正生成子弹在每帧的循环里判断
-        fireHeld = held
-      },
-    )
-
-    // 初始化完成后，只启动一次循环；给一个起始时间戳
-    renderScene(performance.now())
-
+    activeClient.publish({
+      destination,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    return true
   } catch (error) {
-    // 显示接口请求或图片加载过程中的错误
+    errorMessage.value = error instanceof Error ? error.message : '消息发送失败，请重新连接'
+    return false
+  }
+}
+
+/** 输入只提交方向、开火状态和序号；位置、伤害与胜负以服务端为准。 */
+function sendMovement(direction: Direction | null) {
+  const current = initialization.value
+  const state = gameState.value
+  if (
+    !connected.value ||
+    !resourcesReady.value ||
+    !current ||
+    !state ||
+    state.status !== 'PLAYING' ||
+    room.value?.status !== 'PLAYING' ||
+    !state.tanks.some((tank) => tank.userId === auth.user?.id && tank.hp > 0) ||
+    current.matchId !== state.matchId
+  )
+    return
+  ++sequence
+  publish('/app/player/input', {
+    roomId: current.roomId,
+    matchId: current.matchId,
+    seq: sequence,
+    direction,
+    fireHeld: desiredFire,
+  })
+}
+
+function changeDirection(direction: Direction | null) {
+  if (direction !== null) void unlockGameAudio()
+  const nextDirection = playing.value && !document.hidden ? direction : null
+  if (desiredDirection === nextDirection) return
+  desiredDirection = nextDirection
+  sendMovement(desiredDirection)
+}
+
+function stopMovement() {
+  stopGameAudio()
+  desiredDirection = null
+  desiredFire = false
+  sendMovement(null)
+}
+
+function changeFire(held: boolean) {
+  if (held) void unlockGameAudio()
+  const nextFire = playing.value && !document.hidden && held
+  if (desiredFire === nextFire) return
+  desiredFire = nextFire
+  sendMovement(desiredDirection)
+}
+
+function clearGame(retire = true) {
+  // 收到退房或结算通知时，本局已失效；这里只清输入，不再向旧对局发送停止指令。
+  desiredDirection = null
+  desiredFire = false
+  if (retire) retireMatch(initialization.value?.matchId)
+  initialization.value = null
+  gameState.value = null
+  resourcesReady.value = false
+  sequence = 0
+  receivedAt.value = 0
+  initRoomVersion = 0
+}
+
+function clearConnectionState() {
+  clearGame(false)
+  room.value = null
+  pending.value = null
+  leftVersions.clear()
+  retiredMatches.clear()
+  recoveringRoom.value = false
+  copyMessage.value = ''
+  availableRooms.value = []
+  roomsLoading.value = false
+  roomsError.value = ''
+  lastRoomListRequest = 0
+  exitDestination = null
+}
+
+async function copyRoom(invitation = false) {
+  const currentRoom = room.value
+  if (!currentRoom) return
+  const link = new URL(location.href)
+  link.search = ''
+  link.searchParams.set('roomId', currentRoom.roomId)
+  try {
+    await navigator.clipboard.writeText(invitation ? link.toString() : currentRoom.roomId)
+    copyMessage.value = invitation ? '邀请链接已复制，发给另一位玩家即可。' : '房间号已复制。'
+  } catch {
+    copyMessage.value = '浏览器未允许复制，请选择上方房间号手动复制。'
+  }
+}
+
+function beginAction(
+  kind: ActionKind,
+  destination: string,
+  payload: object,
+  roomId: string | null,
+) {
+  if (pending.value !== null) return
+  errorMessage.value = ''
+  pending.value = { kind, roomId, version: room.value?.version ?? 0, sentAt: Date.now() }
+  if (kind === 'create' || kind === 'join' || kind === 'start' || kind === 'rematch')
+    lastResultSummary.value = ''
+  if (!publish(destination, payload)) pending.value = null
+}
+
+function createRoom() {
+  void unlockGameAudio()
+  if (canChooseRoom.value) beginAction('create', '/app/room/create-coop', {}, null)
+}
+
+function joinRoom() {
+  void unlockGameAudio()
+  if (!canChooseRoom.value) return
+  const roomId = roomCode.value.trim()
+  if (roomId.length === 0 || roomId.length > 36) {
+    errorMessage.value = '请填写正确的房间号，最多 36 个字符'
+    return
+  }
+  beginAction('join', '/app/room/join', { roomId }, roomId)
+}
+
+function toggleReady() {
+  void unlockGameAudio()
+  if (!canChangeRoom.value || !room.value || room.value.status !== 'WAITING') return
+  beginAction(
+    'ready',
+    '/app/player/ready',
+    { roomId: room.value.roomId, ready: !isReady.value },
+    room.value.roomId,
+  )
+}
+
+function startGame() {
+  void unlockGameAudio()
+  if (!canStart.value || !room.value) return
+  beginAction('start', '/app/room/start', { roomId: room.value.roomId }, room.value.roomId)
+}
+
+function rematch() {
+  if (!canRematch.value || !room.value) return
+  beginAction('rematch', '/app/room/rematch', { roomId: room.value.roomId }, room.value.roomId)
+}
+
+function leaveRoom() {
+  if (!canChangeRoom.value || !room.value) return
+  stopMovement()
+  beginAction('leave', '/app/room/leave', { roomId: room.value.roomId }, room.value.roomId)
+}
+
+function syncGame() {
+  if (!canChangeRoom.value || !room.value || room.value.status === 'WAITING') return
+  beginAction('sync', '/app/game/sync', { roomId: room.value.roomId }, room.value.roomId)
+}
+
+function acknowledgeRoom(type: string, snapshot: RoomSnapshot) {
+  const action = pending.value
+  if (action === null) return
+  if (type === 'room:created' && action.kind === 'create') {
+    pending.value = null
+    return
+  }
+  if (action.roomId !== snapshot.roomId || snapshot.version < action.version) return
+  // 恢复时对局可能刚好被取消；等待房间没有 game:init，不继续锁住按钮等地图。
+  if (action.kind === 'sync' && snapshot.status === 'WAITING') {
+    pending.value = null
+    return
+  }
+  if (
+    (type === 'room:joined' && action.kind === 'join') ||
+    (type === 'room:ready' && action.kind === 'ready') ||
+    (type === 'room:started' && action.kind === 'start') ||
+    (type === 'room:rematched' && action.kind === 'rematch')
+  )
+    pending.value = null
+}
+
+function applyRoom(type: string, payload: unknown) {
+  const snapshot = readRoom(payload)
+  if (!snapshot || !auth.user || !snapshot.memberUserIds.includes(auth.user.id)) {
+    errorMessage.value = '收到的房间信息不完整，请检查后端是否已更新并重新连接'
+    pending.value = null
+    return
+  }
+  acknowledgeRoom(type, snapshot)
+  const leftVersion = leftVersions.get(snapshot.roomId)
+  if (leftVersion !== undefined && snapshot.version <= leftVersion) return
+  const previous = room.value
+  if (previous?.roomId === snapshot.roomId && snapshot.version < previous.version) return
+  const currentInit = initialization.value
+  if (currentInit?.roomId === snapshot.roomId && snapshot.matchId !== currentInit.matchId) {
+    if (snapshot.status === 'WAITING' && snapshot.version <= initRoomVersion) return
+    clearGame()
+  }
+  if (previous?.matchId && previous.matchId !== snapshot.matchId) retireMatch(previous.matchId)
+  if (previous && previous.roomId !== snapshot.roomId) clearGame()
+  room.value = snapshot
+  const returnedForRematch =
+    snapshot.status === 'WAITING' &&
+    previous?.status === 'FINISHED' &&
+    snapshot.memberUserIds.length === 2
+  if (
+    isResultRoute.value &&
+    (returnedForRematch || (snapshot.matchId !== null && snapshot.matchId !== route.params.matchId))
+  ) {
+    void router.replace({ name: 'game-online' })
+  }
+  if (snapshot.status === 'WAITING') {
+    if (previous?.status === 'LOADING') notice.value = '开局已取消，请双方重新准备。'
+    else if (previous?.status === 'PLAYING' || previous?.status === 'FINISHED')
+      notice.value = lastResultSummary.value || '对局已结束，可以等待玩家加入后重新准备。'
+    else if (!notice.value.includes('退出')) notice.value = '两名玩家准备后，由房主开始游戏。'
+  }
+  // 刷新后取回已开始的房间时，主动请求本局地图与快照。
+  if (
+    (type === 'room:created' || type === 'room:current') &&
+    snapshot.status !== 'WAITING' &&
+    initialization.value?.matchId !== snapshot.matchId
+  )
+    syncGame()
+}
+
+function applyGameState(snapshot: GameSnapshot) {
+  const currentRoom = room.value
+  if (
+    !currentRoom ||
+    snapshot.roomId !== currentRoom.roomId ||
+    retiredMatches.has(snapshot.matchId)
+  )
+    return
+  const expectedMatchId = initialization.value?.matchId ?? currentRoom.matchId
+  if (expectedMatchId !== snapshot.matchId) return
+  const previous = gameState.value
+  if (currentRoom.status === 'FINISHED' && snapshot.status !== 'FINISHED') return
+  if (previous?.matchId === snapshot.matchId) {
+    if (snapshot.tick < previous.tick) return
+    if (previous.status === 'PLAYING' && snapshot.status === 'LOADING') return
+    if (previous.status === 'FINISHED' && snapshot.status !== 'FINISHED') return
+  }
+  if (!auth.user || !snapshot.tanks.some((tank) => tank.userId === auth.user?.id)) return
+  const map = initialization.value?.map
+  if (map) {
+    const width = (map.seed[0]?.length ?? 0) * map.tileSize
+    const height = map.seed.length * map.tileSize
+    for (const tank of snapshot.tanks) {
+      if (tank.x + tank.size > width + 0.001 || tank.y + tank.size > height + 0.001) return
+    }
+  }
+  for (const tank of snapshot.tanks) {
+    if (tank.userId === auth.user.id) sequence = Math.max(sequence, tank.lastInputSeq)
+  }
+  gameState.value = snapshot
+  observeOnlineGameAudio(snapshot, auth.user.id)
+  receivedAt.value = Date.now()
+  if (snapshot.status === 'PLAYING') notice.value = '点击战场，WASD / 方向键移动，按住空格射击。'
+  else if (snapshot.status === 'FINISHED') {
+    desiredDirection = null
+    desiredFire = false
+    notice.value = isOwner.value ? '本局结束，可以选择再来一局。' : '本局结束，等待房主重新开局。'
+    presentSettlement(snapshot)
+  }
+}
+
+function applyInitialization(payload: unknown) {
+  const next = readGameInit(payload)
+  const currentRoom = room.value
+  if (!next) {
+    errorMessage.value = '战场初始化信息不完整，请检查后端版本或重新同步战场'
+    if (pending.value?.kind === 'sync') pending.value = null
+    return
+  }
+  if (!currentRoom || next.roomId !== currentRoom.roomId || retiredMatches.has(next.matchId)) return
+  if (currentRoom.status === 'FINISHED' && next.state.status !== 'FINISHED') return
+  // 同一局的地图不会改变。game:start 可能先到，不能仅因房间已进入 PLAYING 拒绝地图。
+  if (next.roomVersion < currentRoom.version && currentRoom.matchId !== next.matchId) return
+  if (currentRoom.matchId !== null && currentRoom.matchId !== next.matchId) return
+  if (pending.value?.kind === 'sync' && pending.value.roomId === next.roomId) pending.value = null
+  // 同局重复初始化只重发加载确认，避免持续推送反复加载素材。
+  if (initialization.value?.matchId === next.matchId) {
+    applyGameState(next.state)
+    if (resourcesReady.value) resourceLoaded(next.roomId, next.matchId)
+    else initialization.value = next
+    return
+  }
+  const bufferedState = gameState.value?.matchId === next.matchId ? gameState.value : null
+  clearGame(false)
+  initRoomVersion = next.roomVersion
+  initialization.value = next
+  applyGameState(next.state)
+  if (bufferedState !== null) applyGameState(bufferedState)
+  console.log('[GameView.applyInitialization] 收到地图，matchId =', next.matchId)
+}
+
+function resourceLoaded(roomId: string, matchId: string) {
+  if (initialization.value?.roomId !== roomId || initialization.value.matchId !== matchId) return
+  resourcesReady.value = true
+  if (gameState.value?.status !== 'FINISHED') publish('/app/game/loaded', { roomId, matchId })
+}
+
+function handleServerMessage(body: string) {
+  let response: unknown
+  try {
+    response = JSON.parse(body)
+  } catch {
+    return
+  }
+  if (!isObject(response) || typeof response.type !== 'string') return
+  const type = response.type
+  if (type === 'room:list') {
+    const list = readAvailableRooms(response.payload)
+    roomsLoading.value = false
+    if (list === null) roomsError.value = '房间列表格式不正确，请更新后端后重新连接。'
+    else {
+      availableRooms.value = list
+      roomsError.value = ''
+    }
+    return
+  }
+  if (type === 'error') {
+    if (roomsLoading.value && pending.value === null) {
+      roomsLoading.value = false
+      roomsError.value =
+        typeof response.payload === 'string' ? response.payload : '房间列表加载失败'
+      return
+    }
+    pending.value = null
+    exitDestination = null
+    recoveringRoom.value = false
     errorMessage.value =
-      error instanceof Error ? error.message : '地图加载失败'
+      typeof response.payload === 'string' ? response.payload : '操作失败，请重试'
+    requestRoomList(true)
+    return
+  }
+  if (type === 'room:current') {
+    recoveringRoom.value = false
+    if (response.payload === null) {
+      clearGame()
+      room.value = null
+      notice.value = '连接成功，可以创建房间，或输入朋友的房间号加入。'
+      requestRoomList(true)
+    } else applyRoom(type, response.payload)
+    return
+  }
+  if (
+    type === 'room:created' ||
+    type === 'room:joined' ||
+    type === 'room:ready' ||
+    type === 'room:updated' ||
+    type === 'room:started' ||
+    type === 'room:rematched'
+  ) {
+    applyRoom(type, response.payload)
+  } else if (type === 'room:left') {
+    const left = readRoomLeft(response.payload)
+    if (!left) return
+    rememberLeft(left.roomId, left.version)
+    if (room.value?.roomId === left.roomId && room.value.version <= left.version) {
+      retireMatch(room.value.matchId)
+      clearGame()
+      room.value = null
+      pending.value = null
+      notice.value = '已退出房间，可以重新创建或加入。'
+      const destination = exitDestination
+      exitDestination = null
+      if (destination !== null)
+        void router.replace({ name: destination === 'menu' ? 'game' : 'game-online' })
+      requestRoomList(true)
+    } else if (
+      pending.value?.kind === 'leave' &&
+      pending.value.roomId === left.roomId &&
+      left.version > pending.value.version
+    )
+      pending.value = null
+  } else if (type === 'game:init') {
+    applyInitialization(response.payload)
+  } else if (type === 'game:start' || type === 'game:state') {
+    const state = readGameState(response.payload)
+    if (state) applyGameState(state)
+  } else if (type === 'game:end') {
+    const ending = readGameEnd(response.payload)
+    if (!ending || ending.roomId !== room.value?.roomId) return
+    const currentMatchId = initialization.value?.matchId ?? room.value.matchId
+    if (currentMatchId !== ending.matchId) return
+    applyGameState(ending.state)
+    lastResultSummary.value = `${resultTitle.value} ${resultDescription.value}`
+    desiredDirection = null
+    desiredFire = false
+    // 保留最终画面和结算；真正重开或退出时才淘汰旧 matchId。
+    notice.value =
+      ending.reason === 'PLAYER_LEFT' ||
+      ending.reason === 'PLAYER_DISCONNECTED' ||
+      ending.reason === 'ABANDONED'
+        ? lastResultSummary.value
+        : isOwner.value
+          ? '本局结束，可以选择再来一局。'
+          : '本局结束，等待房主重新开局。'
+  }
+}
+
+function cancelReconnect() {
+  if (reconnectTimer !== undefined) clearTimeout(reconnectTimer)
+  reconnectTimer = undefined
+}
+
+function scheduleReconnect() {
+  cancelReconnect()
+  if (disposed || manualDisconnect || !auth.user || auth.loggingOut) return
+  if (reconnectAttempts.value >= 5) {
+    connection.value = 'closed'
+    errorMessage.value = '暂时无法恢复连接，请检查网络和登录状态，再点击连接游戏。'
+    return
+  }
+  reconnectAttempts.value++
+  connection.value = 'reconnecting'
+  notice.value = '连接中断，正在恢复原房间；断线席位最多保留 15 秒。'
+  const delay = Math.min(4000, reconnectAttempts.value * 800)
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined
+    openConnection(true)
+  }, delay)
+}
+
+function requestCurrentRoom() {
+  recoveringRoom.value = true
+  recoveryStartedAt = Date.now()
+  if (!publish('/app/room/current', {})) recoveringRoom.value = false
+}
+
+function connect() {
+  if (!canConnect.value || disposed) return
+  manualDisconnect = false
+  reconnectAttempts.value = 0
+  cancelReconnect()
+  openConnection(false)
+}
+
+function openConnection(retrying: boolean) {
+  if (disposed || client !== null || !auth.user || auth.loggingOut || manualDisconnect) return
+  const expectedUserId = auth.user.id
+  clearConnectionState()
+  errorMessage.value = ''
+  connection.value = retrying ? 'reconnecting' : 'connecting'
+  const nextClient = new Client({
+    brokerURL: endpoint,
+    reconnectDelay: 0,
+    connectionTimeout: 5000,
+    heartbeatIncoming: 5000,
+    heartbeatOutgoing: 5000,
+    onConnect: () => {
+      if (
+        disposed ||
+        client !== nextClient ||
+        auth.user?.id !== expectedUserId ||
+        connection.value === 'closing'
+      )
+        return
+      nextClient.subscribe('/user/queue/replies', (frame) => {
+        if (disposed || client !== nextClient || !connected.value) return
+        handleServerMessage(frame.body)
+      })
+      connection.value = 'connected'
+      reconnectAttempts.value = 0
+      notice.value = '连接成功，正在检查原房间……'
+      // 只查询，不自动创建；刷新或短暂断线后可以找回原房间和本局状态。
+      requestCurrentRoom()
+      console.log('[GameView.connect] 已连接并订阅游戏回复')
+    },
+    onStompError: () => {
+      if (client !== nextClient) return
+      errorMessage.value = '游戏连接被拒绝，请检查登录状态后重新连接'
+      void disconnect()
+    },
+    onWebSocketError: () => {
+      if (client === nextClient) errorMessage.value = '连接失败，请检查登录状态和后端服务'
+    },
+    onWebSocketClose: () => {
+      if (client !== nextClient) return
+      client = null
+      connection.value = 'closed'
+      clearConnectionState()
+      void nextClient.deactivate().catch(() => {})
+      scheduleReconnect()
+    },
+  })
+  client = nextClient
+  try {
+    nextClient.activate()
+  } catch (error) {
+    client = null
+    connection.value = 'closed'
+    errorMessage.value = error instanceof Error ? error.message : '连接启动失败'
+    scheduleReconnect()
+  }
+}
+
+async function disconnect() {
+  manualDisconnect = true
+  cancelReconnect()
+  reconnectAttempts.value = 0
+  stopMovement()
+  const previousClient = client
+  client = null
+  connection.value = 'closing'
+  clearConnectionState()
+  try {
+    await previousClient?.deactivate()
   } finally {
-    // 无论成功还是失败，都结束加载状态
-    loading.value = false
+    if (client === null) connection.value = 'closed'
   }
-})
+}
 
-// 开发阶段用来预览结算界面；接入联机后移除这个监听
+function visibilityChanged() {
+  if (document.hidden) stopMovement()
+}
+
+function pageLeaving() {
+  stopMovement()
+  void disconnect()
+}
+
+watch(
+  () => route.params.matchId,
+  () => restoreSettlement(),
+)
+watch(
+  () => auth.user?.id,
+  async (userId, previousId) => {
+    if (userId !== previousId) {
+      settlement.value = null
+      await disconnect()
+      if (userId !== undefined && !disposed && !auth.loggingOut) connect()
+      restoreSettlement()
+    }
+  },
+)
+watch(
+  () => auth.loggingOut,
+  (loggingOut) => {
+    if (loggingOut) void disconnect()
+  },
+)
 onMounted(() => {
-  window.addEventListener('keydown', handleDemoKey)
+  restoreSettlement()
+  window.addEventListener('blur', stopMovement)
+  document.addEventListener('visibilitychange', visibilityChanged)
+  window.addEventListener('pagehide', pageLeaving)
+  inputTimer = setInterval(() => {
+    clock.value = Date.now()
+    if (pending.value && clock.value - pending.value.sentAt > 12_000) {
+      pending.value = null
+      exitDestination = null
+      errorMessage.value = '操作响应超时，请检查连接后重试。'
+    }
+    if (recoveringRoom.value && clock.value - recoveryStartedAt > 10_000) {
+      recoveringRoom.value = false
+      errorMessage.value = '房间恢复超时，请重新连接后再试。'
+    }
+    if (playing.value && !document.hidden) sendMovement(desiredDirection)
+    if (roomsLoading.value && clock.value - lastRoomListRequest > 8000) {
+      roomsLoading.value = false
+      roomsError.value = '房间列表加载超时，请点击刷新重试。'
+    }
+    if (!document.hidden) requestRoomList()
+  }, 100)
+  if (auth.user && !auth.loggingOut) connect()
 })
-
-//页面离开时触发
 onUnmounted(() => {
-  // 阻止异步初始化和绘制继续执行
+  stopMovement()
   disposed = true
-
-  // 取消下一次动画回调
-  if (animationId !== null) {
-    cancelAnimationFrame(animationId)
-    animationId = null
-  }
-
-  // 解除键盘监听
-  releaseKeys?.()
-
-  // 移除结算预览的监听
-  window.removeEventListener('keydown', handleDemoKey)
+  if (inputTimer !== undefined) clearInterval(inputTimer)
+  window.removeEventListener('blur', stopMovement)
+  document.removeEventListener('visibilitychange', visibilityChanged)
+  window.removeEventListener('pagehide', pageLeaving)
+  void disconnect()
 })
-
-
-
 </script>
 
 <template>
-  <main class="page-container">
-  <!-- 显示加载进度和失败原因 -->
-  <p v-if="loading" role="status">正在加载地图……</p>
-  <p v-if="errorMessage" class="notice notice-error" role="alert">
-    {{ errorMessage }}
-  </p>
-  <!-- 坐标显示：确认坦克真的在动，也方便对照代码里的计算 -->
-  <p v-if="!loading && !errorMessage" class="hud" role="status">{{ hud }}</p>
-  <div class="canvas-wrap">
-    <canvas
-      ref="canvasRef"
-      width="960"
-      height="624"
-      tabindex="0"
-      aria-label="坦克大战，使用方向键或 WASD 移动，空格开火"
-      @pointerdown="canvasRef?.focus()"
-    >
-      当前浏览器不支持 Canvas。
-    </canvas>
-
-    <!-- 结算面板：覆盖在画布上，有结果或错误时才出现 -->
-    <ResultPanel
-      :result="result"
-      :error="resultError"
-      :can-rematch="true"
-      @rematch="handleRematch"
-      @leave="handleLeave"
+  <RouterView v-if="isResultRoute" v-slot="{ Component }">
+    <component
+      :is="Component"
+      :result="displayedSettlement"
+      :can-retry="canRematch"
+      retry-label="再来一局"
+      :busy="pending !== null || recoveringRoom"
+      :notice="resultNotice"
+      :error="errorMessage"
+      @retry="rematch"
+      @lobby="returnFromSettlement('lobby')"
+      @menu="returnFromSettlement('menu')"
     />
-  </div>
+  </RouterView>
+  <main v-show="!isResultRoute" class="page-container game-page">
+    <RouterLink class="text-link back-menu" to="/game">← 返回游戏菜单</RouterLink>
+    <div class="game-heading">
+      <div>
+        <span class="eyebrow">双人联机</span>
+        <h1>{{ room?.mode === 'PVP' ? '双人坦克对战' : '双人合作 · 保卫基地' }}</h1>
+        <p class="muted">
+          {{
+            room?.mode === 'PVP'
+              ? '和朋友切磋，双方准备后开始。'
+              : '邀请朋友一起迎战 AI，消灭敌军，守住基地。'
+          }}
+        </p>
+      </div>
+      <span class="connection-badge" :class="{ online: connected }" role="status">{{
+        connectionText
+      }}</span>
+    </div>
+    <p v-if="!auth.user" class="notice">
+      联机需要登录账号。<RouterLink
+        class="text-link"
+        :to="{ path: '/login', query: { redirect: route.fullPath } }"
+        >登录后返回联机大厅</RouterLink
+      >
+    </p>
+    <p v-if="errorMessage" class="notice notice-error" role="alert">{{ errorMessage }}</p>
+    <p v-if="stateDelayed" class="notice" role="alert">
+      战场更新暂时变慢，请检查网络；可以重新同步战场。
+    </p>
+    <section class="surface room-panel" aria-label="游戏房间">
+      <div class="room-heading">
+        <h2>游戏房间</h2>
+        <div class="action-row">
+          <button
+            class="button button-primary"
+            type="button"
+            :disabled="!canConnect"
+            @click="connect"
+          >
+            {{
+              connection === 'connecting' || connection === 'reconnecting' ? '连接中……' : '连接游戏'
+            }}
+          </button>
+          <button
+            class="button"
+            type="button"
+            :disabled="
+              connection !== 'connected' &&
+              connection !== 'connecting' &&
+              connection !== 'reconnecting'
+            "
+            @click="disconnect"
+          >
+            断开连接
+          </button>
+        </div>
+      </div>
+      <p class="field-caption">
+        同一账号请只打开一个游戏页；两个玩家需使用不同账号和独立浏览器登录。
+      </p>
+      <template v-if="!room">
+        <div class="lobby-controls">
+          <button
+            class="button button-primary"
+            type="button"
+            :disabled="!canChooseRoom"
+            @click="createRoom"
+          >
+            创建房间
+          </button>
+          <form class="join-form" @submit.prevent="joinRoom">
+            <label class="visually-hidden" for="online-room-id">房间号</label>
+            <input
+              id="online-room-id"
+              v-model="roomCode"
+              maxlength="36"
+              placeholder="粘贴朋友的房间号"
+              :disabled="!canChooseRoom"
+            />
+            <button class="button" type="submit" :disabled="!canChooseRoom">加入房间</button>
+          </form>
+        </div>
+        <section v-if="auth.user" class="available-rooms" aria-labelledby="available-rooms-title">
+          <div class="available-rooms-heading">
+            <div>
+              <h3 id="available-rooms-title">房间列表</h3>
+              <p class="field-caption">等待中且未满员的房间，每 3 秒自动刷新。</p>
+            </div>
+            <button
+              class="button button-small"
+              type="button"
+              :disabled="!canChooseRoom || roomsLoading"
+              @click="requestRoomList(true)"
+            >
+              {{ roomsLoading ? '刷新中……' : '刷新列表' }}
+            </button>
+          </div>
+          <p v-if="roomsError" class="notice notice-error" role="alert">{{ roomsError }}</p>
+          <p v-if="!connected || recoveringRoom" class="room-list-empty">
+            连接游戏后显示可加入的房间。
+          </p>
+          <p
+            v-else-if="roomsLoading && availableRooms.length === 0"
+            class="room-list-empty"
+            role="status"
+          >
+            正在查找等待中的房间……
+          </p>
+          <p v-else-if="availableRooms.length === 0 && !roomsError" class="room-list-empty">
+            暂无可加入的房间，可以创建房间邀请朋友。
+          </p>
+          <ul
+            v-else-if="availableRooms.length > 0"
+            class="available-room-cards"
+            aria-label="可加入房间"
+          >
+            <li v-for="item in availableRooms" :key="item.roomId" class="available-room-card">
+              <div>
+                <strong>{{ item.mode === 'COOP' ? '双人合作 PVE' : '双人对战' }}</strong
+                ><span class="available-room-meta"
+                  >房主 {{ item.ownerUserId }} · {{ item.memberCount }}/{{ item.maxMembers }} 人 ·
+                  等待中</span
+                ><code>{{ item.roomId }}</code>
+              </div>
+              <button
+                class="button button-primary"
+                type="button"
+                :disabled="!canChooseRoom"
+                @click="joinListedRoom(item)"
+              >
+                加入
+              </button>
+            </li>
+          </ul>
+        </section>
+      </template>
+      <template v-else>
+        <div class="room-meta">
+          <div>
+            <span class="meta-label">房间号</span><code>{{ room.roomId }}</code>
+          </div>
+          <span class="phase-badge">{{ phaseText }}</span>
+        </div>
+        <div class="invite-actions">
+          <button class="button button-small" type="button" @click="copyRoom()">复制房间号</button>
+          <button class="button button-small" type="button" @click="copyRoom(true)">
+            复制邀请链接
+          </button>
+          <span v-if="copyMessage" class="field-caption" role="status">{{ copyMessage }}</span>
+        </div>
+        <p v-if="disconnectedMembers.length > 0" class="notice disconnect-notice" role="status">
+          队友暂时断线，席位保留 15 秒，战斗仍在继续。恢复连接后继续；超时则中止本局合作。
+        </p>
+        <ul class="players" aria-label="房间成员">
+          <li v-for="memberId in room.memberUserIds" :key="memberId">
+            <span
+              class="player-color"
+              :class="{ self: memberId === auth.user?.id }"
+              aria-hidden="true"
+            ></span>
+            <strong>{{
+              memberId === auth.user?.id ? `${auth.user.username}（你）` : `队友 ${memberId}`
+            }}</strong>
+            <span v-if="memberId === room.ownerUserId" class="small-badge">房主</span>
+            <span
+              class="member-connection"
+              :class="{ offline: !room.connectedUserIds.includes(memberId) }"
+            >
+              {{ room.connectedUserIds.includes(memberId) ? '在线' : '断线中' }}
+            </span>
+            <span v-if="gameState" class="ready-label">{{
+              gameState.tanks.find((tank) => tank.userId === memberId)?.hp === 0
+                ? '已阵亡'
+                : '战斗中'
+            }}</span>
+            <span
+              v-else
+              class="ready-label"
+              :class="{ ready: room.readyUserIds.includes(memberId) }"
+              >{{ room.readyUserIds.includes(memberId) ? '已准备' : '未准备' }}</span
+            >
+          </li>
+          <li v-if="room.memberUserIds.length < 2" class="empty-seat">
+            等待另一位玩家加入（{{ room.memberUserIds.length }} / 2）
+          </li>
+        </ul>
+        <div class="action-row">
+          <button
+            v-if="room.status === 'WAITING'"
+            class="button"
+            type="button"
+            :disabled="!canChangeRoom"
+            @click="toggleReady"
+          >
+            {{ isReady ? '取消准备' : '准备' }}
+          </button>
+          <button
+            v-if="isOwner && room.status === 'WAITING'"
+            class="button button-primary"
+            type="button"
+            :disabled="!canStart"
+            @click="startGame"
+          >
+            开始游戏
+          </button>
+          <button
+            v-if="room.status !== 'WAITING'"
+            class="button"
+            type="button"
+            :disabled="!canChangeRoom"
+            @click="syncGame"
+          >
+            重新同步战场
+          </button>
+          <button class="button" type="button" :disabled="!canChangeRoom" @click="leaveRoom">
+            退出房间
+          </button>
+        </div>
+      </template>
+      <p class="room-notice" role="status">
+        {{ recoveringRoom ? '正在恢复原房间……' : pendingText || notice }}
+      </p>
+      <p class="field-caption">
+        断线后会自动尝试重连，席位最多保留 15 秒。要立即释放席位，请点击“退出房间”。
+      </p>
+    </section>
+    <section v-if="room && auth.user" class="arena-panel" aria-label="联机坦克战场">
+      <GameBattleCanvas
+        v-if="!isResultRoute"
+        :hud="battleHud"
+        :initialization="initialization"
+        :state="gameState"
+        :playing="playing"
+        :current-user-id="auth.user.id"
+        @loaded="resourceLoaded"
+        @direction="changeDirection"
+        @fire="changeFire"
+        @load-error="errorMessage = $event"
+      />
+    </section>
+    <section v-else class="surface how-to">
+      <h2>如何开始</h2>
+      <ol>
+        <li>两人分别登录，页面自动连接。一人创建房间，分享房间号或邀请链接。</li>
+        <li>双方准备后，由房主点击开始游戏。</li>
+        <li>点击战场，用 WASD 或方向键移动，按住空格射击。松键或切换窗口后停止。</li>
+        <li>每人 3 血，队友互不伤害。共同消灭 8 辆敌军获胜；基地被毁或全员阵亡则失败。</li>
+        <li>一人阵亡后可以观战队友。结束后由房主选择再来一局。</li>
+      </ol>
+    </section>
   </main>
 </template>
 
 <style scoped>
-.hud {
-  max-width: 960px;
-  margin: 16px auto 0;
-  font-family: ui-monospace, monospace;
+.game-page {
+  max-width: 1120px;
+}
+.available-rooms {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border);
+}
+.available-rooms-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.available-rooms-heading h3 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+.room-list-empty {
+  padding: 24px 0 8px;
+  color: var(--color-muted);
   font-size: 13px;
-  color: #526176;
 }
-
-.canvas-wrap {
-  position: relative;
-  max-width: 960px;
-  margin: 20px auto 0;
+.available-room-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0;
 }
-
-canvas {
+.available-room-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--color-background-soft);
+  border-radius: 10px;
+}
+.available-room-card > div {
+  min-width: 0;
+}
+.available-room-card strong {
   display: block;
-  width: 100%;
-
-  height: auto;
-  /* canvas 是替换元素，只写 height:auto 时高度会取内在尺寸 624px 而不是按比例缩放，
-     结果画布被横向拉伸。用 aspect-ratio 锁死 960:624 的原始比例。 */
-  aspect-ratio: 960 / 624;
-  max-width: 960px;
-  background: #000;
-  image-rendering: pixelated;
+  font-size: 14px;
 }
-
-.game-canvas {
-  max-width: 100%;
-  height: auto;
+.available-room-meta {
+  display: block;
+  margin: 7px 0;
+  color: var(--color-muted);
+  font-size: 12px;
 }
-
+.available-room-card code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+.available-room-card button {
+  flex-shrink: 0;
+}
+@media (max-width: 720px) {
+  .available-room-cards {
+    grid-template-columns: 1fr;
+  }
+}
+.back-menu {
+  display: inline-block;
+  margin-bottom: 18px;
+  font-size: 13px;
+}
+.invite-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0 18px;
+}
+.member-connection {
+  color: var(--color-brand);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.member-connection.offline {
+  color: var(--color-danger);
+}
+.disconnect-notice {
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+.arena-panel {
+  margin-top: 20px;
+  padding: 0;
+}
+.battle-result {
+  max-width: 656px;
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  border: 1px solid #e0c6b3;
+  background: #fff5ed;
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 18px;
+}
+.battle-result.victory {
+  border-color: #bad7c1;
+  background: #eff8f0;
+}
+.battle-result.draw {
+  border-color: var(--color-border);
+  background: var(--color-background-soft);
+}
+.battle-result h3 {
+  font-size: 24px;
+  margin: 0 0 6px;
+}
+.battle-result p {
+  margin: 0;
+  font-size: 13px;
+}
+.game-heading,
+.room-heading,
+.room-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.game-heading {
+  margin-bottom: 24px;
+}
+.game-heading h1 {
+  margin: 6px 0 10px;
+  font-size: clamp(27px, 4vw, 36px);
+}
+.game-heading p {
+  font-size: 14px;
+}
+.connection-badge,
+.phase-badge {
+  flex-shrink: 0;
+  padding: 7px 12px;
+  border-radius: 20px;
+  background: var(--color-background-soft);
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.connection-badge.online {
+  color: var(--color-brand);
+  background: var(--color-brand-soft);
+}
+.room-panel,
+.how-to {
+  padding: 24px;
+  margin-top: 20px;
+}
+.room-heading {
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+h2 {
+  margin: 0;
+  font-size: 19px;
+}
+.action-row,
+.lobby-controls,
+.join-form {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.lobby-controls,
+.room-meta {
+  margin: 22px 0;
+}
+.join-form {
+  flex: 1;
+}
+.join-form input {
+  width: min(100%, 360px);
+  min-width: 200px;
+  flex: 1;
+}
+.room-meta code {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.meta-label,
+.map-name {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.players {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+.players li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  padding: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.player-color {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: #d49a2f;
+}
+.player-color.self {
+  background: #258851;
+}
+.small-badge {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--color-background-soft);
+  color: var(--color-muted);
+  font-size: 11px;
+}
+.ready-label {
+  margin-left: auto;
+  color: var(--color-muted);
+}
+.ready-label.ready {
+  color: var(--color-brand);
+  font-weight: 600;
+}
+.players .empty-seat {
+  color: var(--color-muted);
+  border-style: dashed;
+}
+.room-notice {
+  margin: 18px 0 8px;
+  color: var(--color-brand);
+  font-size: 13px;
+}
+.field-caption {
+  display: block;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--color-muted);
+}
+.how-to ol {
+  margin: 16px 0 0;
+  padding-left: 22px;
+  font-size: 14px;
+  line-height: 2;
+  color: var(--color-muted);
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+@media (max-width: 640px) {
+  .players {
+    grid-template-columns: 1fr;
+  }
+  .game-heading,
+  .room-meta {
+    align-items: flex-start;
+  }
+  .room-meta {
+    flex-direction: column;
+  }
+  .room-panel,
+  .how-to {
+    padding: 18px;
+  }
+  .action-row {
+    gap: 8px;
+  }
+}
 </style>

@@ -49,16 +49,44 @@ const router = createRouter({
       component: () => import('../views/RegisterView.vue'),
     },
     {
-      path: '/game/ws-test',
-      name: 'websocket-test',
-      component: () => import('../views/WebSocketTestView.vue'),
-    },
-    {
       path: '/game',
       name: 'game',
+      component: () => import('../views/GameMenuView.vue'),
+    },
+    {
+      path: '/game/single',
+      name: 'game-single',
+      component: () => import('../views/SinglePlayerGameView.vue'),
+      children: [
+        {
+          path: 'result',
+          name: 'game-single-result',
+          component: () => import('../views/GameResultView.vue'),
+        },
+      ],
+    },
+    {
+      path: '/game/online',
+      name: 'game-online',
       component: () => import('../views/GameView.vue'),
+      children: [
+        {
+          path: 'result/:matchId',
+          name: 'game-online-result',
+          component: () => import('../views/GameResultView.vue'),
+        },
+      ],
     },
   ],
 })
+
+// Vite 在生产构建时移除此分支，学习页面也不会生成发布用的页面文件。
+if (import.meta.env.DEV) {
+  router.addRoute({
+    path: '/game/ws-test',
+    name: 'websocket-test',
+    component: () => import('../views/WebSocketTestView.vue'),
+  })
+}
 
 export default router
