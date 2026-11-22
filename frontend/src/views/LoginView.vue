@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AppIcon from '@/components/AppIcon.vue'
 import BlogArtwork from '@/components/BlogArtwork.vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -13,6 +13,9 @@ const isError = ref(false)
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
+const returningToGame = computed(
+  () => typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/game'),
+)
 
 async function handleSubmit() {
   message.value = ''
@@ -78,7 +81,7 @@ async function handleSubmit() {
     }
   } catch {
     isError.value = true
-    message.value = '无法连接后端，请确认后端已在 8081 端口启动'
+    message.value = '暂时无法连接服务，请检查网络后重试'
   } finally {
     loading.value = false
   }
@@ -96,7 +99,13 @@ async function handleSubmit() {
       </aside>
       <section class="auth-form-panel" aria-labelledby="login-title">
         <h1 id="login-title">登录博客</h1>
-        <p class="auth-description">登录你的账号，开始阅读与写作。</p>
+        <p class="auth-description">
+          {{
+            returningToGame
+              ? '登录后返回联机大厅，继续与朋友合作。'
+              : '登录你的账号，开始阅读与写作。'
+          }}
+        </p>
         <form @submit.prevent="handleSubmit">
           <div class="field">
             <label for="username">用户名</label
@@ -105,6 +114,9 @@ async function handleSubmit() {
               v-model.trim="username"
               placeholder="输入你的用户名"
               autocomplete="username"
+              autocapitalize="none"
+              :spellcheck="false"
+              enterkeyhint="next"
               :disabled="loading"
               required
             />
@@ -117,6 +129,7 @@ async function handleSubmit() {
               type="password"
               placeholder="输入你的密码"
               autocomplete="current-password"
+              enterkeyhint="go"
               :disabled="loading"
               required
             />
@@ -133,7 +146,10 @@ async function handleSubmit() {
             {{ loading ? '验证中……' : '登录' }}<AppIcon name="arrow-right" />
           </button>
           <p class="auth-switch">
-            还没有账号？<RouterLink to="/register">创建一个账号</RouterLink>
+            还没有账号？<RouterLink
+              :to="{ path: '/register', query: { redirect: route.query.redirect } }"
+              >创建一个账号</RouterLink
+            >
           </p>
         </form>
       </section>

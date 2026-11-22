@@ -161,6 +161,7 @@ const teammateSprite = `${import.meta.env.BASE_URL}resources/png/players/tank_T1
   color: #9eb59f;
   font-size: 12px;
   text-align: left;
+  flex-wrap: wrap;
 }
 .result-emblem {
   display: flex;
@@ -199,6 +200,7 @@ h1:focus {
   color: #b6c6b8;
   font-size: 14px;
   line-height: 1.9;
+  overflow-wrap: anywhere;
 }
 .result-stats {
   display: flex;
@@ -267,6 +269,16 @@ h1:focus {
   font-size: 13px;
   line-height: 1.8;
 }
+@media (any-pointer: coarse) {
+  .result-actions .button {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .result-topline :deep(.audio-toggle) {
+    min-height: 44px;
+    font-size: 13px;
+  }
+}
 @media (max-width: 520px) {
   .result-page {
     padding-top: 26px;
@@ -274,14 +286,41 @@ h1:focus {
   .result-screen {
     padding: 18px 16px 26px;
   }
+  .result-topline {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .result-topline :deep(.audio-toggle) {
+    min-height: 44px;
+    font-size: 13px;
+  }
+  .result-topline :deep(.game-audio-controls) {
+    max-width: 100%;
+  }
   .result-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 22px 12px;
   }
   .result-stats > div {
-    min-width: 112px;
+    min-width: 0;
+  }
+  .result-stats .result-score {
+    grid-column: 1 / -1;
+  }
+  .result-stats dd {
+    overflow-wrap: anywhere;
+  }
+  .result-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
   }
   .result-actions .button {
-    flex: 1 1 120px;
+    min-height: 48px;
+    min-width: 0;
+    width: 100%;
+    font-size: 14px;
   }
 }
 </style>

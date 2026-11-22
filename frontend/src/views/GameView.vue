@@ -606,7 +606,8 @@ function applyGameState(snapshot: GameSnapshot) {
   gameState.value = snapshot
   observeOnlineGameAudio(snapshot, auth.user.id)
   receivedAt.value = Date.now()
-  if (snapshot.status === 'PLAYING') notice.value = '点击战场，WASD / 方向键移动，按住空格射击。'
+  if (snapshot.status === 'PLAYING')
+    notice.value = '触屏使用左侧方向键、右侧射击；电脑使用 WASD / 方向键和空格。'
   else if (snapshot.status === 'FINISHED') {
     desiredDirection = null
     desiredFire = false
@@ -1021,6 +1022,10 @@ onUnmounted(() => {
               v-model="roomCode"
               maxlength="36"
               placeholder="粘贴朋友的房间号"
+              autocomplete="off"
+              autocapitalize="none"
+              :spellcheck="false"
+              enterkeyhint="go"
               :disabled="!canChooseRoom"
             />
             <button class="button" type="submit" :disabled="!canChooseRoom">加入房间</button>
@@ -1189,7 +1194,9 @@ onUnmounted(() => {
       <ol>
         <li>两人分别登录，页面自动连接。一人创建房间，分享房间号或邀请链接。</li>
         <li>双方准备后，由房主点击开始游戏。</li>
-        <li>点击战场，用 WASD 或方向键移动，按住空格射击。松键或切换窗口后停止。</li>
+        <li>
+          手机使用左侧方向键与右侧射击；电脑点击战场后使用方向键和空格。松手或切换窗口后停止操作。
+        </li>
         <li>每人 3 血，队友互不伤害。共同消灭 8 辆敌军获胜；基地被毁或全员阵亡则失败。</li>
         <li>一人阵亡后可以观战队友。结束后由房主选择再来一局。</li>
       </ol>
@@ -1470,7 +1477,77 @@ h2 {
   overflow: hidden;
   clip-path: inset(50%);
 }
+@media (any-pointer: coarse) {
+  .room-panel .button {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .join-form input {
+    min-height: 48px;
+    font-size: 16px;
+  }
+  .back-menu {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
 @media (max-width: 640px) {
+  .game-heading > div,
+  .room-meta > div,
+  .available-rooms-heading > div {
+    min-width: 0;
+  }
+  .game-heading,
+  .available-rooms-heading {
+    flex-wrap: wrap;
+  }
+  .room-heading .action-row,
+  .join-form {
+    width: 100%;
+  }
+  .join-form {
+    flex-basis: 100%;
+  }
+  .join-form input {
+    flex: 1 1 100%;
+    min-width: 0;
+    min-height: 48px;
+    font-size: 16px;
+  }
+  .join-form .button {
+    width: 100%;
+  }
+  .room-panel .button {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .room-heading .action-row > .button,
+  .invite-actions > .button {
+    flex: 1 1 120px;
+  }
+  .back-menu {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    margin-bottom: 10px;
+    font-size: 14px;
+  }
+  .room-meta code {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .players strong {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .game-page > .notice,
+  .room-panel > .field-caption,
+  .room-notice,
+  .disconnect-notice {
+    overflow-wrap: anywhere;
+  }
   .players {
     grid-template-columns: 1fr;
   }

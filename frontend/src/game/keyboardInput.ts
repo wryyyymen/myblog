@@ -3,6 +3,11 @@ import type { PlayerState } from './playRenderer'
 // 复用玩家方向类型：0上、1下、2左、3右
 type Direction = PlayerState['direction']
 
+export interface KeyboardInputBinding {
+  reset(): void
+  dispose(): void
+}
+
 // 绑定键盘按键与坦克方向
 const keyDirections = new Map<string, Direction>([
   ['ArrowUp', 0],
@@ -16,14 +21,14 @@ const keyDirections = new Map<string, Direction>([
 ])
 
 /**
- * 监听移动输入变化，并返回解除绑定的方法。
+ * 监听移动输入变化，返回清空按键和解除监听的方法。
  * @param canvas 获得焦点后接收方向键和 WASD 的游戏画布。
  * @param onDirectionChange 输入改变时回调；0～3 表示方向，null 表示停止。
  */
 export function bindDirectionKeys(
   canvas: HTMLCanvasElement,
   onDirectionChange: (direction: Direction | null) => void,
-): () => void {
+): KeyboardInputBinding {
   // 按下的按键按顺序保存，最后按下的优先
   let pressedKeys: string[] = []
 
@@ -81,7 +86,7 @@ export function bindDirectionKeys(
   canvas.addEventListener('blur', clearKeys)
   window.addEventListener('blur', clearKeys)
 
-  return () => {
+  function dispose(): void {
     canvas.removeEventListener('keydown', handleKeyDown)
     window.removeEventListener('keyup', handleKeyUp)
     canvas.removeEventListener('blur', clearKeys)
@@ -90,4 +95,6 @@ export function bindDirectionKeys(
     // 页面离开时，也报告停止输入
     clearKeys()
   }
+
+  return { reset: clearKeys, dispose }
 }

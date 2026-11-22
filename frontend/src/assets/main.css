@@ -1048,3 +1048,72 @@ textarea {
     gap: 8px;
   }
 }
+
+/* 游戏入口与账号流程：为手机触摸、软键盘和屏幕安全区留出空间。 */
+@media (max-width: 760px), (any-pointer: coarse) {
+  .game-flow .header-inner {
+    min-height: 64px;
+    gap: 8px 12px;
+    padding: max(8px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 8px
+      max(16px, env(safe-area-inset-left));
+  }
+  .game-flow .brand-mark {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+  }
+  .game-flow .brand-name {
+    font-size: 14px;
+  }
+  .game-flow .brand-caption {
+    display: none;
+  }
+  .game-flow .main-nav {
+    gap: 12px;
+  }
+  .game-flow .main-nav a,
+  .game-flow .header-actions .text-link,
+  .game-flow .header-actions .text-button {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .game-flow .header-actions .button {
+    min-height: 44px;
+  }
+  .game-flow .header-status,
+  .game-flow .page-body {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .game-flow .page-container {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: calc(36px + env(safe-area-inset-bottom));
+  }
+  .game-flow .site-footer {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+  .game-flow .auth-story {
+    display: none;
+  }
+  .auth-page .auth-form-panel {
+    min-width: 0;
+    padding: 24px 20px;
+  }
+  .auth-page input {
+    min-height: 48px;
+    font-size: 16px;
+  }
+  .auth-page .button {
+    min-height: 48px;
+    font-size: 16px;
+  }
+  .auth-switch a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, triggerRef } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, triggerRef, watch } from 'vue'
 import { bindDirectionKeys } from '@/game/keyboardInput'
+import { GameInputState, type InputDirection } from '@/game/inputState'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import BattleFrame from '@/components/BattleFrame.vue'
 import type { BattleHudState } from '@/game/battleHud'
@@ -34,6 +35,8 @@ const game = shallowRef(createSinglePlayerGame())
 const errorMessage = ref('')
 const assetsReady = ref(false)
 const controls: PlayerControls = { direction: null, fireHeld: false }
+const inputState = new GameInputState()
+const inputResetKey = ref(0)
 const hasFocus = ref(false)
 const elapsedText = computed(() => {
   const seconds = Math.floor(game.value.time)
@@ -68,7 +71,7 @@ const overlayTitle = computed(() => {
 })
 let animationId = 0
 let disposed = false
-let releaseKeys: (() => void) | undefined
+let keyboardBinding: ReturnType<typeof bindDirectionKeys> | undefined
 let assets: SinglePlayerAssets | null = null
 let matchId = createMatchId()
 
@@ -108,9 +111,47 @@ async function prepareAssets() {
   }
 }
 
+function canControl(): boolean {
+  return (
+    !disposed &&
+    assetsReady.value &&
+    game.value.status === 'playing' &&
+    !showingResult.value &&
+    !document.hidden
+  )
+}
+
+/** 每次输入变化时合并来源，模拟循环仍只读取现有 controls。 */
+function applyInput() {
+  if (!canControl()) inputState.clearAll()
+  const input = inputState.read()
+  controls.direction = input.direction
+  controls.fireHeld = input.fireHeld
+}
+
 function clearInput() {
-  controls.direction = null
-  controls.fireHeld = false
+  // 先清来源，reset 的同步回调也不会重新读到上一局的触屏输入。
+  inputState.clearAll()
+  keyboardBinding?.reset()
+  inputResetKey.value++
+  applyInput()
+}
+
+function handleKeyboardDirection(direction: InputDirection) {
+  inputState.setDirection('keyboard', canControl() ? direction : null)
+  applyInput()
+}
+
+function handleTouchDirection(direction: InputDirection) {
+  if (direction !== null) void unlockGameAudio()
+  inputState.setDirection('touch', canControl() ? direction : null)
+  applyInput()
+}
+
+function handleTouchFire(held: boolean) {
+  if (held) void unlockGameAudio()
+  inputState.setFire('touch', canControl() && held)
+  applyInput()
 }
 
 function focusBattlefield() {
@@ -191,7 +232,10 @@ function keyDown(event: KeyboardEvent) {
   if (!event.repeat) void unlockGameAudio()
   if (event.code === 'Space') {
     event.preventDefault()
-    if (game.value.status === 'playing') controls.fireHeld = true
+    if (!event.repeat) {
+      inputState.setFire('keyboard', canControl())
+      applyInput()
+    }
   } else if ((event.code === 'KeyP' || event.code === 'Escape') && !event.repeat) {
     event.preventDefault()
     togglePause()
@@ -202,13 +246,21 @@ function keyDown(event: KeyboardEvent) {
 }
 
 function keyUp(event: KeyboardEvent) {
-  if (event.code === 'Space') controls.fireHeld = false
+  if (event.code !== 'Space') return
+  inputState.setFire('keyboard', false)
+  applyInput()
 }
 
 function canvasBlur() {
   hasFocus.value = false
-  clearInput()
+  // 触控按钮获焦只释放键盘，不打断另一只手仍按住的移动或射击。
+  inputState.clear('keyboard')
+  applyInput()
 }
+
+watch(showingResult, (showing) => {
+  if (showing) clearInput()
+})
 
 onMounted(() => {
   const canvas = canvasRef.value
@@ -218,9 +270,7 @@ onMounted(() => {
     return
   }
   void prepareAssets()
-  releaseKeys = bindDirectionKeys(canvas, (direction) => {
-    controls.direction = game.value.status === 'playing' ? direction : null
-  })
+  keyboardBinding = bindDirectionKeys(canvas, handleKeyboardDirection)
   canvas.addEventListener('keydown', keyDown)
   window.addEventListener('keyup', keyUp)
   window.addEventListener('blur', pauseWhenAway)
@@ -256,7 +306,7 @@ onMounted(() => {
 onUnmounted(() => {
   disposed = true
   cancelAnimationFrame(animationId)
-  releaseKeys?.()
+  keyboardBinding?.dispose()
   clearInput()
   stopGameAudio()
   assets = null
@@ -293,13 +343,20 @@ onUnmounted(() => {
     <p v-if="errorMessage" class="notice notice-error" role="alert">{{ errorMessage }}</p>
     <div class="solo-layout">
       <section class="solo-battle" aria-label="单人坦克战场">
-        <BattleFrame :hud="battleHud" :active="!showingResult">
+        <BattleFrame
+          :hud="battleHud"
+          :active="!showingResult"
+          :controls-enabled="assetsReady && game.status === 'playing' && !showingResult"
+          :input-reset-key="inputResetKey"
+          @direction="handleTouchDirection"
+          @fire="handleTouchFire"
+        >
           <canvas
             ref="canvasRef"
             width="624"
             height="624"
             tabindex="0"
-            aria-label="单人坦克大战。WASD或方向键移动，空格射击，P暂停，R重开。"
+            aria-label="单人坦克大战。可用屏幕方向键和射击按钮，或WASD、方向键和空格操作，P暂停，R重开。"
             @pointerdown="focusBattlefield"
             @focus="hasFocus = true"
             @blur="canvasBlur"
@@ -349,7 +406,9 @@ onUnmounted(() => {
             </div>
           </div>
           <template #footer>
-            <span>{{ hasFocus ? 'WASD / 方向键移动 · 空格射击' : '点击战场后使用键盘' }}</span>
+            <span class="keyboard-hint">{{
+              hasFocus ? 'WASD / 方向键移动 · 空格射击' : '点击战场后使用键盘'
+            }}</span>
             <div class="battle-actions">
               <button
                 class="button"
@@ -357,10 +416,11 @@ onUnmounted(() => {
                 :disabled="game.status !== 'playing' && game.status !== 'paused'"
                 @click="togglePause"
               >
-                {{ game.status === 'paused' ? '继续 P' : '暂停 P' }}
+                {{ game.status === 'paused' ? '继续' : '暂停'
+                }}<span class="keyboard-shortcut"> P</span>
               </button>
               <button class="button" type="button" :disabled="!assetsReady" @click="restart">
-                重开 R
+                重开<span class="keyboard-shortcut"> R</span>
               </button>
             </div>
           </template>
@@ -369,6 +429,7 @@ onUnmounted(() => {
       <aside class="solo-sidebar">
         <section class="surface mission-card controls-card">
           <h2>操作</h2>
+          <p>手机：左侧方向区移动，右侧按住射击，可同时操作。横屏或全屏游玩视野更完整。</p>
           <p><kbd>W A S D</kbd> 或 <kbd>↑ ↓ ← →</kbd><span>移动与转向</span></p>
           <p><kbd>空格</kbd><span>按住连续开火</span></p>
           <p><kbd>P</kbd> / <kbd>Esc</kbd><span>暂停与继续</span></p>

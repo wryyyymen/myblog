@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '@/components/AppIcon.vue'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -10,6 +10,15 @@ const route = useRoute()
 const logoutError = ref('')
 // WebSocket 学习页面只在本地开发时提供入口。
 const showWebSocketTest = import.meta.env.DEV
+const isGameFlow = computed(() => {
+  if (route.path.startsWith('/game')) return true
+  const redirect = route.query.redirect
+  return (
+    (route.path === '/login' || route.path === '/register') &&
+    typeof redirect === 'string' &&
+    redirect.startsWith('/game')
+  )
+})
 
 async function handleLogout() {
   if (auth.loggingOut) return
@@ -34,7 +43,7 @@ const year = new Date().getFullYear()
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'game-flow': isGameFlow }">
     <a class="skip-link" href="#main-content">跳转到页面内容</a>
     <header class="site-header">
       <div class="header-inner">

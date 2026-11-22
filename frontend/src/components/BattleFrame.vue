@@ -2,34 +2,78 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import BattleHud from '@/components/BattleHud.vue'
 import GameAudioControls from '@/components/GameAudioControls.vue'
+import GameTouchControls from '@/components/GameTouchControls.vue'
 import type { BattleHudState } from '@/game/battleHud'
+import type { InputDirection } from '@/game/inputState'
 
 const props = withDefaults(
-  defineProps<{ hud: BattleHudState | null; aspectRatio?: number; active?: boolean }>(),
-  { aspectRatio: 1, active: true },
+  defineProps<{
+    hud: BattleHudState | null
+    aspectRatio?: number
+    active?: boolean
+    controlsEnabled?: boolean
+    inputResetKey?: string | number
+  }>(),
+  { aspectRatio: 1, active: true, controlsEnabled: false, inputResetKey: 0 },
 )
+const emit = defineEmits<{
+  direction: [direction: InputDirection]
+  fire: [held: boolean]
+}>()
 
 const frameRef = ref<HTMLDivElement | null>(null)
 const viewportRef = ref<HTMLDivElement | null>(null)
+const touchControlsRef = ref<InstanceType<typeof GameTouchControls> | null>(null)
+const touchCapable = ref(false)
+const touchOverride = ref<boolean | null>(null)
+const windowBattleHeight = ref(760)
+const showTouchControls = computed(() => touchOverride.value ?? touchCapable.value)
 const nativeFullscreen = ref(false)
 const windowFullscreen = ref(false)
 const switchingFullscreen = ref(false)
 const stageWidth = ref(0)
 const stageHeight = ref(0)
 const isFullscreen = computed(() => nativeFullscreen.value || windowFullscreen.value)
+const fitToArea = computed(() => isFullscreen.value || showTouchControls.value)
+const frameStyle = computed(() => {
+  if (!showTouchControls.value || isFullscreen.value) return undefined
+  return { height: `${windowBattleHeight.value}px` }
+})
 const stageStyle = computed(() => {
-  if (!isFullscreen.value) return undefined
+  if (!fitToArea.value) return undefined
   return { width: `${stageWidth.value}px`, height: `${stageHeight.value}px` }
 })
 let resizeObserver: ResizeObserver | undefined
 let previousBodyOverflow = ''
 let bodyScrollLocked = false
 let disposed = false
+let coarsePointer: MediaQueryList | undefined
+
+function updateAvailableSpace() {
+  // 窗口模式也为手机留出完整操作区；原生全屏时由全屏容器决定高度。
+  windowBattleHeight.value = Math.max(
+    340,
+    Math.min(920, (window.visualViewport?.height ?? window.innerHeight) - 24),
+  )
+  fitStage()
+}
+
+function detectTouchCapability() {
+  touchCapable.value = (coarsePointer?.matches ?? false) || navigator.maxTouchPoints > 0
+}
+
+function detectTouch(event: PointerEvent) {
+  if (event.pointerType === 'touch') touchCapable.value = true
+}
+
+function toggleTouchControls() {
+  touchOverride.value = !showTouchControls.value
+}
 
 /** 只缩放显示尺寸，保留画布坐标、移动速度和碰撞计算使用的逻辑分辨率。 */
 function fitStage() {
   const viewport = viewportRef.value
-  if (!viewport || !isFullscreen.value) return
+  if (!viewport || !fitToArea.value) return
   const aspectRatio =
     Number.isFinite(props.aspectRatio) && props.aspectRatio > 0 ? props.aspectRatio : 1
   const width = Math.min(viewport.clientWidth, viewport.clientHeight * aspectRatio)
@@ -49,6 +93,7 @@ function restoreBodyScroll() {
 }
 
 function fullscreenChanged() {
+  touchControlsRef.value?.reset()
   nativeFullscreen.value = document.fullscreenElement === frameRef.value
 }
 
@@ -95,6 +140,7 @@ function escapeWindowFullscreen(event: KeyboardEvent) {
 }
 
 watch(windowFullscreen, (fullscreen) => {
+  touchControlsRef.value?.reset()
   if (fullscreen) {
     previousBodyOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -108,6 +154,10 @@ watch(isFullscreen, async () => {
   focusBattlefield()
 })
 watch(() => props.aspectRatio, fitStage)
+watch(showTouchControls, async () => {
+  await nextTick()
+  if (!disposed) updateAvailableSpace()
+})
 // 单人结算使用嵌套路由，战场仍挂载但被隐藏，因此也要主动退出全屏。
 watch(
   () => props.active,
@@ -117,10 +167,17 @@ watch(
 )
 
 onMounted(() => {
+  coarsePointer = window.matchMedia('(any-pointer: coarse)')
+  coarsePointer.addEventListener('change', detectTouchCapability)
+  detectTouchCapability()
+  updateAvailableSpace()
   resizeObserver = new ResizeObserver(fitStage)
   if (viewportRef.value) resizeObserver.observe(viewportRef.value)
   document.addEventListener('fullscreenchange', fullscreenChanged)
   window.addEventListener('keydown', escapeWindowFullscreen, true)
+  window.addEventListener('pointerdown', detectTouch, { passive: true })
+  window.addEventListener('resize', updateAvailableSpace)
+  window.visualViewport?.addEventListener('resize', updateAvailableSpace)
 })
 
 onBeforeUnmount(() => {
@@ -128,20 +185,52 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   document.removeEventListener('fullscreenchange', fullscreenChanged)
   window.removeEventListener('keydown', escapeWindowFullscreen, true)
+  window.removeEventListener('pointerdown', detectTouch)
+  window.removeEventListener('resize', updateAvailableSpace)
+  window.visualViewport?.removeEventListener('resize', updateAvailableSpace)
+  coarsePointer?.removeEventListener('change', detectTouchCapability)
   restoreBodyScroll()
   leaveFullscreen()
 })
 </script>
 
 <template>
-  <div ref="frameRef" class="battle-frame" :class="{ 'is-fullscreen': isFullscreen }">
+  <div
+    ref="frameRef"
+    class="battle-frame"
+    :class="{
+      'is-fullscreen': isFullscreen,
+      'has-touch-controls': showTouchControls,
+      'fits-area': fitToArea,
+    }"
+    :style="frameStyle"
+  >
     <BattleHud :state="hud" />
-    <div ref="viewportRef" class="battle-viewport">
-      <div class="battle-stage" :style="stageStyle"><slot /></div>
-    </div>
+    <GameTouchControls
+      ref="touchControlsRef"
+      :visible="showTouchControls"
+      :enabled="active && controlsEnabled"
+      :reset-key="inputResetKey"
+      @direction="emit('direction', $event)"
+      @fire="emit('fire', $event)"
+    >
+      <div ref="viewportRef" class="battle-viewport">
+        <div class="battle-stage" :style="stageStyle"><slot /></div>
+      </div>
+    </GameTouchControls>
     <footer class="battle-footer">
       <slot name="footer" />
       <GameAudioControls />
+      <button
+        class="button touch-toggle"
+        type="button"
+        :aria-pressed="showTouchControls"
+        :aria-label="showTouchControls ? '收起触屏控制' : '显示触屏控制'"
+        @click="toggleTouchControls"
+      >
+        <span class="touch-toggle-label">{{ showTouchControls ? '收起触控' : '触控' }}</span>
+        <span class="touch-toggle-short" aria-hidden="true">触控</span>
+      </button>
       <button
         class="button fullscreen-button"
         type="button"
@@ -169,6 +258,24 @@ onBeforeUnmount(() => {
 .battle-viewport {
   min-width: 0;
   min-height: 0;
+}
+.battle-frame.has-touch-controls {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.fits-area :deep(.touch-stage) {
+  display: flex;
+}
+.fits-area .battle-viewport {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.fits-area .battle-stage :deep(canvas) {
+  width: 100%;
+  height: 100%;
 }
 .battle-stage {
   position: relative;
@@ -206,6 +313,18 @@ onBeforeUnmount(() => {
 .fullscreen-button {
   flex-shrink: 0;
   margin-left: auto;
+}
+.touch-toggle {
+  flex-shrink: 0;
+}
+.touch-toggle-short {
+  display: none;
+}
+.has-touch-controls .battle-footer :deep(.keyboard-hint) {
+  display: none;
+}
+.has-touch-controls .battle-footer :deep(.keyboard-shortcut) {
+  display: none;
 }
 .battle-frame.is-fullscreen {
   position: fixed;
@@ -250,6 +369,42 @@ onBeforeUnmount(() => {
 @media (max-width: 520px) {
   .battle-frame {
     padding: 10px;
+  }
+  .has-touch-controls :deep(.battle-hud) {
+    gap: 6px;
+    padding-bottom: 8px;
+  }
+  .has-touch-controls :deep(.battle-mission-details) {
+    margin-top: 3px;
+  }
+  .has-touch-controls :deep(.battle-mode) {
+    font-size: 12px;
+    letter-spacing: 0;
+  }
+  .has-touch-controls :deep(.battle-score strong) {
+    font-size: 20px;
+  }
+  .has-touch-controls .battle-footer {
+    gap: 6px;
+    padding-top: 8px;
+  }
+  .has-touch-controls .battle-footer > :deep(span) {
+    display: none;
+  }
+  .has-touch-controls .battle-footer :deep(.button),
+  .has-touch-controls .battle-footer :deep(.audio-toggle) {
+    min-height: 40px;
+    min-width: 44px;
+    padding: 6px 8px;
+  }
+  .touch-toggle-label {
+    display: none;
+  }
+  .touch-toggle-short {
+    display: inline;
+  }
+  .has-touch-controls .battle-footer :deep(.audio-volume) {
+    display: none;
   }
 }
 </style>

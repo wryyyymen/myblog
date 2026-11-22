@@ -108,7 +108,8 @@ onUnmounted(() => {
             <span aria-hidden="true">{{ showHelp ? '−' : '+' }}</span>
           </button>
           <div v-if="showHelp" id="game-help" class="game-help">
-            <p><kbd>WASD</kbd> / <kbd>方向键</kbd> 移动 · <kbd>空格</kbd> 持续开火</p>
+            <p>手机：左侧方向键移动，右侧按住射击，可以边移动边开火。</p>
+            <p>电脑：<kbd>WASD</kbd> / <kbd>方向键</kbd> 移动 · <kbd>空格</kbd> 持续开火</p>
             <p>单人：击退 8 辆敌军并保护基地，<kbd>P</kbd> 暂停、<kbd>R</kbd> 重开。</p>
             <p>
               合作：双方登录不同账号，分享房间号并准备。共同消灭 8
@@ -133,7 +134,9 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="machine-bottom">
-        <span>WASD / ↑ ↓ ← →</span><span>SPACE TO FIRE</span><span>SELECT YOUR MODE</span>
+        <span class="keyboard-hint">WASD / ↑ ↓ ← →</span>
+        <span class="keyboard-hint">SPACE TO FIRE</span>
+        <span class="touch-hint">左侧方向 · 右侧射击</span><span>SELECT YOUR MODE</span>
       </div>
     </section>
   </main>
@@ -268,6 +271,7 @@ onUnmounted(() => {
 .mode-copy {
   display: grid;
   gap: 5px;
+  min-width: 0;
 }
 .mode-kicker {
   color: #b5cb98;
@@ -300,6 +304,7 @@ onUnmounted(() => {
   font-size: 11px;
   line-height: 1.8;
   margin: 20px 0 15px;
+  overflow-wrap: anywhere;
 }
 .help-toggle {
   display: flex;
@@ -379,6 +384,26 @@ kbd {
   padding: 19px 6px 2px;
   color: #7d9685;
   font-size: 10px;
+  flex-wrap: wrap;
+}
+.touch-hint {
+  display: none;
+}
+@media (any-pointer: coarse) {
+  .keyboard-hint {
+    display: none;
+  }
+  .touch-hint {
+    display: inline;
+  }
+  .help-toggle {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .menu-audio :deep(.audio-toggle) {
+    min-height: 44px;
+    font-size: 13px;
+  }
 }
 @media (max-width: 900px) {
   .menu-screen {
@@ -419,6 +444,39 @@ kbd {
   .machine-bottom {
     font-size: 8px;
     letter-spacing: 0.3px;
+  }
+  .help-toggle {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .mode-caption,
+  .menu-intro,
+  .menu-account,
+  .game-help,
+  .preview-note {
+    font-size: 13px;
+  }
+  .mode-caption {
+    overflow-wrap: anywhere;
+  }
+  .menu-audio :deep(.audio-toggle) {
+    min-height: 44px;
+    font-size: 13px;
+  }
+}
+@media (max-width: 380px) {
+  .menu-screen {
+    padding: 20px 14px;
+  }
+  .mode-option {
+    gap: 12px;
+    padding: 14px 12px;
+  }
+  .mode-arrow {
+    font-size: 20px;
+  }
+  .machine-edition {
+    display: none;
   }
 }
 </style>
