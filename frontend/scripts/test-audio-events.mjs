@@ -1,14 +1,9 @@
-import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import ts from 'typescript'
+import { loadGameModule } from './load-game-module.mjs'
 
 async function importTypeScript(path) {
-  const source = await readFile(new URL(path, import.meta.url), 'utf8')
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
+  return loadGameModule(new URL(path, import.meta.url))
 }
 
 const { captureSingleAudioFrame, singleAudioEvents, onlineAudioEvents } = await importTypeScript(

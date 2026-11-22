@@ -4,6 +4,7 @@ import { bindDirectionKeys } from '@/game/keyboardInput'
 import { GameInputState, type InputDirection } from '@/game/inputState'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import BattleFrame from '@/components/BattleFrame.vue'
+import { gameLevels, getGameLevel } from '@/game/maps/catalog'
 import type { BattleHudState } from '@/game/battleHud'
 import {
   createSinglePlayerGame,
@@ -27,11 +28,23 @@ import { observeSinglePlayerAudio, stopGameAudio, unlockGameAudio } from '@/game
 const route = useRoute()
 const router = useRouter()
 const resultStorageKey = 'tank:single:last-result'
-const result = shallowRef<GameResult | null>(loadGameResult(resultStorageKey))
+const result = shallowRef<GameResult | null>(
+  route.name === 'game-single-result' ? loadGameResult(resultStorageKey) : null,
+)
 const showingResult = computed(() => route.name === 'game-single-result')
 const restarting = ref(false)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
-const game = shallowRef(createSinglePlayerGame())
+function levelIdFromRoute(): number {
+  const queryId = typeof route.query.level === 'string' ? Number(route.query.level) : NaN
+  if (gameLevels.some((level) => level.id === queryId)) return queryId
+  if (showingResult.value && result.value?.levelId) return result.value.levelId
+  return 1
+}
+const game = shallowRef(createSinglePlayerGame(Date.now(), levelIdFromRoute()))
+const currentLevel = computed(() => getGameLevel(game.value.levelId))
+const canNextLevel = computed(
+  () => assetsReady.value && result.value?.outcome === 'VICTORY' && (result.value.levelId ?? 5) < 5,
+)
 const errorMessage = ref('')
 const assetsReady = ref(false)
 const controls: PlayerControls = { direction: null, fireHeld: false }
@@ -43,7 +56,7 @@ const elapsedText = computed(() => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 })
 const battleHud = computed<BattleHudState>(() => ({
-  mode: '单人闯关 · 基地防线',
+  mode: `第 ${game.value.levelId} 关 · ${game.value.levelName}`,
   players: [
     {
       role: 'self',
@@ -87,9 +100,11 @@ function showResult() {
   canvasRef.value?.blur()
   result.value = ending
   saveGameResult(resultStorageKey, ending)
-  void router.replace({ name: 'game-single-result' }).catch(() => {
-    errorMessage.value = '结算页面打开失败，请返回菜单后重试。'
-  })
+  void router
+    .replace({ name: 'game-single-result', query: { level: game.value.levelId } })
+    .catch(() => {
+      errorMessage.value = '结算页面打开失败，请返回菜单后重试。'
+    })
 }
 
 function returnToMenu() {
@@ -180,6 +195,17 @@ function startOrResume() {
 }
 
 async function restart() {
+  await startLevel(
+    showingResult.value ? (result.value?.levelId ?? game.value.levelId) : game.value.levelId,
+  )
+}
+
+async function nextLevel() {
+  if (!canNextLevel.value || !result.value?.levelId) return
+  await startLevel(result.value.levelId + 1)
+}
+
+async function startLevel(levelId: number) {
   if (!assetsReady.value || restarting.value) return
   restarting.value = true
   stopGameAudio()
@@ -188,11 +214,11 @@ async function restart() {
   matchId = createMatchId()
   result.value = null
   clearGameResult(resultStorageKey)
-  game.value = createSinglePlayerGame()
+  game.value = createSinglePlayerGame(Date.now(), levelId)
   startSinglePlayerGame(game.value)
   observeSinglePlayerAudio(game.value)
   try {
-    await router.replace({ name: 'game-single' })
+    await router.replace({ name: 'game-single', query: { level: levelId } })
     await nextTick(focusBattlefield)
   } catch {
     errorMessage.value = '新一局打开失败，请返回菜单后重试。'
@@ -261,6 +287,20 @@ function canvasBlur() {
 watch(showingResult, (showing) => {
   if (showing) clearInput()
 })
+watch(
+  () => route.query.level,
+  () => {
+    if (showingResult.value) return
+    const levelId = levelIdFromRoute()
+    if (levelId === game.value.levelId) return
+    clearInput()
+    stopGameAudio()
+    result.value = null
+    clearGameResult(resultStorageKey)
+    matchId = createMatchId()
+    game.value = createSinglePlayerGame(Date.now(), levelId)
+  },
+)
 
 onMounted(() => {
   const canvas = canvasRef.value
@@ -324,10 +364,12 @@ onUnmounted(() => {
       :result="result"
       :can-retry="assetsReady"
       :retry-label="result ? '再来一局' : '开始游戏'"
+      :can-next-level="canNextLevel"
       :busy="restarting"
       :error="errorMessage"
       :show-lobby="false"
       @retry="restart"
+      @next-level="nextLevel"
       @menu="returnToMenu"
     />
   </RouterView>
@@ -335,8 +377,10 @@ onUnmounted(() => {
     <div class="solo-heading">
       <div>
         <span class="eyebrow">单人 PVE · 经典坦克大战</span>
-        <h1>守住最后的基地</h1>
-        <p class="muted">驾驶绿色坦克，击退 8 辆敌军坦克，保护底部的鹰形基地。</p>
+        <h1>第 {{ game.levelId }} 关 · {{ game.levelName }}</h1>
+        <p class="muted">
+          {{ currentLevel.description }} 击退 {{ game.totalEnemies }} 辆敌军，保护基地。
+        </p>
       </div>
       <RouterLink class="solo-badge" to="/game">← 返回菜单</RouterLink>
     </div>
@@ -439,7 +483,7 @@ onUnmounted(() => {
         <section class="mission-tips">
           <h2>战场提示</h2>
           <ul>
-            <li>击毁全部 8 辆敌军获胜。</li>
+            <li>击毁本关全部 {{ game.totalEnemies }} 辆敌军获胜。</li>
             <li>你的装甲归零，或基地被摧毁，任务失败。</li>
             <li>砖墙可破坏；钢墙和河流阻挡坦克。</li>
             <li>子弹可以越过河流，树林可以提供遮挡。</li>

@@ -2,6 +2,8 @@ import type { SinglePlayerState } from './singleplayer/engine'
 
 /** 结算页仅保存展示所需的数据，不保存登录凭据或运行中的游戏对象。 */
 export interface GameResult {
+  levelId?: number
+  levelName?: string
   mode: 'single' | 'coop' | 'pvp'
   matchId: string
   outcome: 'VICTORY' | 'DEFEAT' | 'DRAW' | 'ABANDONED'
@@ -25,6 +27,15 @@ function isInteger(value: unknown, minimum: number, maximum: number): value is n
 export function readGameResult(value: unknown): GameResult | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const result = value as Record<string, unknown>
+  const hasLevel = result.levelId !== undefined || result.levelName !== undefined
+  if (
+    hasLevel &&
+    (!isInteger(result.levelId, 1, 5) ||
+      typeof result.levelName !== 'string' ||
+      result.levelName.length === 0 ||
+      result.levelName.length > 100)
+  )
+    return null
   if (
     (result.mode !== 'single' && result.mode !== 'coop' && result.mode !== 'pvp') ||
     typeof result.matchId !== 'string' ||
@@ -46,6 +57,9 @@ export function readGameResult(value: unknown): GameResult | null {
   )
     return null
   return {
+    ...(hasLevel
+      ? { levelId: result.levelId as number, levelName: result.levelName as string }
+      : {}),
     mode: result.mode,
     matchId: result.matchId,
     outcome: result.outcome,
@@ -95,6 +109,7 @@ export function createSinglePlayerResult(
   if (state.status !== 'won' && state.status !== 'lost') return null
   return {
     mode: 'single',
+    ...(state.levelId !== undefined ? { levelId: state.levelId, levelName: state.levelName } : {}),
     matchId,
     outcome: state.status === 'won' ? 'VICTORY' : 'DEFEAT',
     reason: state.result,

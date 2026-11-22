@@ -5,6 +5,7 @@ import GameAudioControls from '@/components/GameAudioControls.vue'
 import GameTouchControls from '@/components/GameTouchControls.vue'
 import type { BattleHudState } from '@/game/battleHud'
 import type { InputDirection } from '@/game/inputState'
+import { shouldShowTouchControlsByDefault } from '@/game/touchDefaults'
 
 const props = withDefaults(
   defineProps<{
@@ -24,10 +25,10 @@ const emit = defineEmits<{
 const frameRef = ref<HTMLDivElement | null>(null)
 const viewportRef = ref<HTMLDivElement | null>(null)
 const touchControlsRef = ref<InstanceType<typeof GameTouchControls> | null>(null)
-const touchCapable = ref(false)
+const defaultTouchControls = ref(false)
 const touchOverride = ref<boolean | null>(null)
 const windowBattleHeight = ref(760)
-const showTouchControls = computed(() => touchOverride.value ?? touchCapable.value)
+const showTouchControls = computed(() => touchOverride.value ?? defaultTouchControls.value)
 const nativeFullscreen = ref(false)
 const windowFullscreen = ref(false)
 const switchingFullscreen = ref(false)
@@ -47,7 +48,6 @@ let resizeObserver: ResizeObserver | undefined
 let previousBodyOverflow = ''
 let bodyScrollLocked = false
 let disposed = false
-let coarsePointer: MediaQueryList | undefined
 
 function updateAvailableSpace() {
   // 窗口模式也为手机留出完整操作区；原生全屏时由全屏容器决定高度。
@@ -58,12 +58,16 @@ function updateAvailableSpace() {
   fitStage()
 }
 
-function detectTouchCapability() {
-  touchCapable.value = (coarsePointer?.matches ?? false) || navigator.maxTouchPoints > 0
-}
-
-function detectTouch(event: PointerEvent) {
-  if (event.pointerType === 'touch') touchCapable.value = true
+function initializeTouchControls() {
+  const deviceNavigator = navigator as Navigator & { userAgentData?: { mobile?: boolean } }
+  defaultTouchControls.value = shouldShowTouchControlsByDefault({
+    userAgent: deviceNavigator.userAgent,
+    platform: deviceNavigator.platform,
+    maxTouchPoints: deviceNavigator.maxTouchPoints,
+    mobileHint: deviceNavigator.userAgentData?.mobile,
+    coarsePointer: window.matchMedia('(pointer: coarse)').matches,
+    hoverNone: window.matchMedia('(hover: none)').matches,
+  })
 }
 
 function toggleTouchControls() {
@@ -167,15 +171,13 @@ watch(
 )
 
 onMounted(() => {
-  coarsePointer = window.matchMedia('(any-pointer: coarse)')
-  coarsePointer.addEventListener('change', detectTouchCapability)
-  detectTouchCapability()
+  // 默认值只在挂载时确定，旋转屏幕、调整窗口或触摸电脑屏幕不会覆盖手动选择。
+  initializeTouchControls()
   updateAvailableSpace()
   resizeObserver = new ResizeObserver(fitStage)
   if (viewportRef.value) resizeObserver.observe(viewportRef.value)
   document.addEventListener('fullscreenchange', fullscreenChanged)
   window.addEventListener('keydown', escapeWindowFullscreen, true)
-  window.addEventListener('pointerdown', detectTouch, { passive: true })
   window.addEventListener('resize', updateAvailableSpace)
   window.visualViewport?.addEventListener('resize', updateAvailableSpace)
 })
@@ -185,10 +187,8 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   document.removeEventListener('fullscreenchange', fullscreenChanged)
   window.removeEventListener('keydown', escapeWindowFullscreen, true)
-  window.removeEventListener('pointerdown', detectTouch)
   window.removeEventListener('resize', updateAvailableSpace)
   window.visualViewport?.removeEventListener('resize', updateAvailableSpace)
-  coarsePointer?.removeEventListener('change', detectTouchCapability)
   restoreBodyScroll()
   leaveFullscreen()
 })

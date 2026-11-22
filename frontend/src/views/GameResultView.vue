@@ -12,6 +12,7 @@ const props = withDefaults(
     notice?: string
     error?: string
     showLobby?: boolean
+    canNextLevel?: boolean
   }>(),
   {
     retryLabel: '再来一局',
@@ -19,9 +20,10 @@ const props = withDefaults(
     notice: '',
     error: '',
     showLobby: true,
+    canNextLevel: false,
   },
 )
-defineEmits<{ retry: []; lobby: []; menu: [] }>()
+defineEmits<{ retry: []; nextLevel: []; lobby: []; menu: [] }>()
 const titleRef = ref<HTMLHeadingElement | null>(null)
 function focusTitle() {
   if (!document.fullscreenElement) titleRef.value?.focus()
@@ -73,6 +75,14 @@ const teammateSprite = `${import.meta.env.BASE_URL}resources/png/players/tank_T1
       </div>
       <span class="result-tag">{{ outcomeTag }}</span>
       <h1 id="result-title" ref="titleRef" tabindex="-1">{{ title }}</h1>
+      <p v-if="result?.levelName" class="result-level">
+        第 {{ result.levelId }} 关 · {{ result.levelName
+        }}<template
+          v-if="result.mode === 'single' && result.levelId === 5 && result.outcome === 'VICTORY'"
+        >
+          · 最后一关已完成</template
+        >
+      </p>
       <p class="result-reason">
         {{
           result
@@ -109,6 +119,15 @@ const teammateSprite = `${import.meta.env.BASE_URL}resources/png/players/tank_T1
       <p v-if="error" class="result-error" role="alert">{{ error }}</p>
       <p v-if="notice" class="result-notice" role="status">{{ notice }}</p>
       <div class="result-actions">
+        <button
+          v-if="canNextLevel"
+          class="button result-primary"
+          type="button"
+          :disabled="busy"
+          @click="$emit('nextLevel')"
+        >
+          下一关
+        </button>
         <button
           class="button result-primary"
           type="button"
@@ -201,6 +220,11 @@ h1:focus {
   font-size: 14px;
   line-height: 1.9;
   overflow-wrap: anywhere;
+}
+.result-level {
+  color: #c3d8a0;
+  font-size: 14px;
+  line-height: 1.8;
 }
 .result-stats {
   display: flex;

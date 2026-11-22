@@ -77,6 +77,32 @@ test('cooperative snapshots accept NPC bullets, a shared base and two human tank
   assert.equal(snapshot.tanks.length, 2)
 })
 
+test('cooperative maps accept larger waves and still reject invalid totals', () => {
+  for (const total of [8, 10, 12, 14, 16]) {
+    const value = state()
+    value.enemyTotal = total
+    assert.equal(readGameState(value)?.enemyTotal, total)
+  }
+  for (const total of [0, -1, 101, 10.5, NaN]) {
+    const value = state()
+    value.enemyTotal = total
+    assert.equal(readGameState(value), null)
+  }
+  const lateWave = state()
+  lateWave.enemyTotal = 16
+  lateWave.enemies = Array.from({ length: 16 }, (_, index) => ({
+    ...lateWave.enemies[0],
+    id: index + 1,
+    hp: index < 11 ? 0 : 1,
+  }))
+  lateWave.enemySpawned = 16
+  lateWave.enemyDefeated = 11
+  lateWave.bullets[0].ownerUserId = -16
+  assert.equal(readGameState(lateWave)?.enemySpawned, 16)
+  lateWave.enemies[15].id = 17
+  assert.equal(readGameState(lateWave), null)
+})
+
 test('protection ticks are preserved, invalid values rejected and older snapshots remain readable', () => {
   const value = state()
   value.tanks[0].shieldUntilTick = 60

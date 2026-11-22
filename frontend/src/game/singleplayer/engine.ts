@@ -1,3 +1,5 @@
+import { createLevelMap, gameMapSettings, getGameLevel } from '../maps/catalog'
+
 /** 单人 PVE 规则。与 Vue、Canvas 和网络分开，便于独立验证。 */
 export type Direction = 0 | 1 | 2 | 3
 export type Team = 'player' | 'enemy'
@@ -40,6 +42,11 @@ export interface Effect {
   expiresAt: number
 }
 export interface SinglePlayerState {
+  levelId: number
+  levelName: string
+  maxAliveEnemies: number
+  enemySpeed: number
+  spawnIntervalSeconds: number
   status: GameStatus
   map: number[][]
   tileSize: number
@@ -66,49 +73,13 @@ export interface PlayerControls {
 }
 
 export const FIXED_STEP = 1 / 60
-const TILE = 24
+const TILE = gameMapSettings.tileSize
 const BOARD_SIZE = 26
 const PLAYER_SPEED = 112
-const ENEMY_SPEED = 48
 const EPSILON = 0.00001
 
 function passable(material: number | undefined) {
   return material === 0 || material === 4 || material === 5
-}
-
-function createMap(): number[][] {
-  const map: number[][] = []
-  for (let row = 0; row < BOARD_SIZE; row++) {
-    const cells: number[] = []
-    for (let column = 0; column < BOARD_SIZE; column++) {
-      cells.push(
-        row === 0 || column === 0 || row === BOARD_SIZE - 1 || column === BOARD_SIZE - 1 ? 2 : 0,
-      )
-    }
-    map.push(cells)
-  }
-  function put(row: number, column: number, material: number) {
-    const cells = map[row]
-    if (cells) cells[column] = material
-  }
-  for (const column of [4, 8, 17, 21]) {
-    for (let row = 3; row <= 8; row++) if (row !== 6) put(row, column, 1)
-    for (let row = 13; row <= 19; row++) if (row !== 16) put(row, column, 1)
-  }
-  for (let column = 3; column <= 6; column++) put(10, column, 1)
-  for (let column = 19; column <= 22; column++) put(10, column, 1)
-  for (let column = 10; column <= 15; column++) put(11, column, 3)
-  for (const row of [7, 15]) for (const column of [12, 13]) put(row, column, 2)
-  for (let row = 17; row <= 19; row++)
-    for (let column = 3; column <= 6; column++) put(row, column, 4)
-  for (let row = 4; row <= 6; row++)
-    for (let column = 19; column <= 22; column++) put(row, column, 4)
-  for (let row = 19; row <= 20; row++)
-    for (let column = 17; column <= 20; column++) put(row, column, 5)
-  for (const column of [12, 13, 14]) put(23, column, 1)
-  put(24, 12, 1)
-  put(24, 14, 1)
-  return map
 }
 
 function tank(id: number, team: Team, row: number, column: number): Tank {
@@ -131,22 +102,36 @@ function tank(id: number, team: Team, row: number, column: number): Tank {
   }
 }
 
-export function createSinglePlayerGame(seed = Date.now()): SinglePlayerState {
+/** 保留seed作为第一个参数；第二个参数选择关卡，旧调用默认进入第一关。 */
+export function createSinglePlayerGame(seed = Date.now(), levelId = 1): SinglePlayerState {
+  const level = getGameLevel(levelId)
+  const playerSpawn = gameMapSettings.playerSpawns[0]
+  if (!playerSpawn) throw new Error('地图未配置单人出生点')
   return {
+    levelId: level.id,
+    levelName: level.name,
+    maxAliveEnemies: level.maxAliveEnemies,
+    enemySpeed: level.enemySpeed,
+    spawnIntervalSeconds: level.spawnIntervalMillis / 1000,
     status: 'ready',
-    map: createMap(),
+    map: createLevelMap(level.id),
     tileSize: TILE,
     width: BOARD_SIZE * TILE,
     height: BOARD_SIZE * TILE,
-    player: tank(1, 'player', 23, 10),
+    player: tank(1, 'player', playerSpawn.row, playerSpawn.column),
     enemies: [],
     bullets: [],
     effects: [],
-    base: { x: 13 * TILE, y: 24 * TILE, size: TILE, alive: true },
+    base: {
+      x: gameMapSettings.base.column * TILE,
+      y: gameMapSettings.base.row * TILE,
+      size: TILE,
+      alive: true,
+    },
     time: 0,
     score: 0,
     kills: 0,
-    totalEnemies: 8,
+    totalEnemies: level.enemyTotal,
     spawnedEnemies: 0,
     nextSpawnAt: 0,
     nextId: 2,
@@ -239,14 +224,15 @@ function moveTank(
 function spawnEnemy(state: SinglePlayerState) {
   if (
     state.spawnedEnemies >= state.totalEnemies ||
-    state.enemies.length >= 3 ||
+    state.enemies.length >= state.maxAliveEnemies ||
     state.time < state.nextSpawnAt
   )
     return
-  const columns = [1, 13, 24]
-  for (let attempt = 0; attempt < columns.length; attempt++) {
-    const column = columns[(state.spawnedEnemies + attempt) % columns.length] ?? 1
-    const enemy = tank(state.nextId, 'enemy', 1, column)
+  const spawns = gameMapSettings.enemySpawns
+  for (let attempt = 0; attempt < spawns.length; attempt++) {
+    const spawn = spawns[(state.spawnedEnemies + attempt) % spawns.length]
+    if (!spawn) continue
+    const enemy = tank(state.nextId, 'enemy', spawn.row, spawn.column)
     if (
       allTanks(state).some((other) => other.alive && overlaps(enemy.x, enemy.y, enemy.size, other))
     )
@@ -255,7 +241,7 @@ function spawnEnemy(state: SinglePlayerState) {
     state.enemies.push(enemy)
     state.nextId++
     state.spawnedEnemies++
-    state.nextSpawnAt = state.time + 2.4
+    state.nextSpawnAt = state.time + state.spawnIntervalSeconds
     return
   }
   state.nextSpawnAt = state.time + 0.3
@@ -318,7 +304,12 @@ function pathTo(state: SinglePlayerState, current: Tank, goal: Cell): Cell[] {
       )
         continue
       if (!passable(state.map[next.row]?.[next.column])) continue
-      if (state.base.alive && next.row === 24 && next.column === 13) continue
+      if (
+        state.base.alive &&
+        next.row === state.base.y / TILE &&
+        next.column === state.base.x / TILE
+      )
+        continue
       const x = next.column * TILE + (TILE - current.size) / 2
       const y = next.row * TILE + (TILE - current.size) / 2
       if (
@@ -400,13 +391,13 @@ function updateEnemy(state: SinglePlayerState, enemy: Tank, delta: number) {
             row: Math.floor((state.player.y + state.player.size / 2) / TILE),
             column: Math.floor((state.player.x + state.player.size / 2) / TILE),
           }
-        : { row: 22, column: 13 }
+        : { row: state.base.y / TILE - 2, column: state.base.x / TILE }
     enemy.path = pathTo(state, enemy, goal)
     enemy.thinkAt = state.time + 0.85
   }
   const next = enemy.path[0]
   let direction = enemy.direction
-  let distance = ENEMY_SPEED * delta
+  let distance = state.enemySpeed * delta
   if (next) {
     const destinationX = next.column * TILE + (TILE - enemy.size) / 2
     const destinationY = next.row * TILE + (TILE - enemy.size) / 2

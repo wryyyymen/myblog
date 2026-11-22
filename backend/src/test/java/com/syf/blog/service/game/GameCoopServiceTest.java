@@ -2,6 +2,7 @@ package com.syf.blog.service.game;
 
 import com.syf.blog.dto.game.play.GameInitResponse;
 import com.syf.blog.dto.game.play.GameStateResponse;
+import com.syf.blog.dto.game.GameMapResponse;
 import com.syf.blog.dto.game.room.RoomResponse;
 import com.syf.blog.exception.BusinessException;
 import com.syf.blog.game.runtime.GameBroadcast;
@@ -9,6 +10,7 @@ import com.syf.blog.game.runtime.BulletState;
 import com.syf.blog.game.runtime.GameMatch;
 import com.syf.blog.game.runtime.GameRoom;
 import com.syf.blog.game.runtime.RoomLeaveResult;
+import com.syf.blog.game.map.GameLevelCatalog;
 import com.syf.blog.service.GameMapService;
 import com.syf.blog.websocket.game.GameRoomNotifier;
 import org.junit.jupiter.api.Test;
@@ -25,6 +27,71 @@ class GameCoopServiceTest {
     private final GameMapService maps = mock(GameMapService.class);
     private final GameRoomNotifier notifier = mock(GameRoomNotifier.class);
     private final GameMatchService matches = new GameMatchService(rooms, maps, notifier);
+
+    @Test
+    void installMapValidatesAndInstallsItsActualArgumentWithoutReplacingTheLayout() {
+        String roomId = rooms.createCoopRoom(14L).getRoomId();
+        rooms.joinRoom(15L, roomId);
+        rooms.setReady(14L, roomId, true);
+        rooms.setReady(15L, roomId, true);
+        RoomResponse loading = rooms.beginStart(14L, roomId, 1000L);
+        GameMapResponse source = GameLevelCatalog.getDefault().getById(5).createMap();
+        int originalMaterial = source.seed().get(1).get(2);
+        source.seed().get(1).set(2, 2);
+
+        assertThrows(BusinessException.class, () -> rooms.installMap(roomId, loading.getMatchId(), source));
+        assertNull(runtime(roomId));
+
+        source.seed().get(1).set(2, originalMaterial);
+        GameMapResponse namedSource = new GameMapResponse(source.id(), "加载阶段传入的地图副本",
+                source.tileSize(), source.seed());
+        GameInitResponse installed = rooms.installMap(roomId, loading.getMatchId(), namedSource);
+        assertEquals(namedSource.name(), installed.getMap().name());
+        assertEquals(namedSource.seed(), installed.getMap().seed());
+        assertEquals(16, installed.getState().getEnemyTotal());
+        verifyNoInteractions(maps, notifier);
+    }
+
+    @Test
+    void ownerSelectedLevelIsInstalledForBothPlayersAndRecoveredAfterReconnect() {
+        String roomId = rooms.createCoopRoom(14L).getRoomId();
+        rooms.joinRoom(15L, roomId);
+        rooms.setReady(14L, roomId, true);
+        rooms.setReady(15L, roomId, true);
+
+        RoomResponse loading = matches.start(14L, roomId, 5);
+
+        GameInitResponse first = rooms.getGameInit(14L, roomId);
+        GameInitResponse second = rooms.getGameInit(15L, roomId);
+        assertEquals(5L, first.getMap().id());
+        assertEquals(first.getMap(), second.getMap());
+        assertEquals(16, first.getState().getEnemyTotal());
+        assertEquals(loading.getMatchId(), second.getMatchId());
+        rooms.confirmLoaded(14L, roomId, loading.getMatchId());
+        rooms.confirmLoaded(15L, roomId, loading.getMatchId());
+        rooms.markDisconnected(15L, 1000L);
+        rooms.markConnected(15L, 2000L);
+        assertEquals(5L, rooms.getGameInit(15L, roomId).getMap().id());
+        verifyNoInteractions(maps);
+    }
+
+    @Test
+    void invalidLevelCannotChangeRoomStateOrNotifyOtherPlayers() {
+        String roomId = rooms.createCoopRoom(14L).getRoomId();
+        rooms.joinRoom(15L, roomId);
+        rooms.setReady(14L, roomId, true);
+        rooms.setReady(15L, roomId, true);
+        long version = rooms.getRoom(14L, roomId).getVersion();
+
+        assertThrows(BusinessException.class, () -> matches.start(14L, roomId, 0));
+        assertThrows(BusinessException.class, () -> matches.start(14L, roomId, 6));
+
+        assertEquals("WAITING", rooms.getRoom(14L, roomId).getStatus());
+        assertEquals(version, rooms.getRoom(14L, roomId).getVersion());
+        assertEquals(2, rooms.getRoom(14L, roomId).getReadyUserIds().size());
+        assertNull(rooms.getRoom(14L, roomId).getMatchId());
+        verifyNoInteractions(maps, notifier);
+    }
 
     @Test
     void cooperativeCreationIsIdempotentAndCannotChangeAnExistingPvpRoom() {

@@ -3,6 +3,8 @@ import { Client } from '@stomp/stompjs'
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import GameBattleCanvas from '@/components/GameBattleCanvas.vue'
+import GameLevelPicker from '@/components/GameLevelPicker.vue'
+import { gameLevels } from '@/game/maps/catalog'
 import type { BattleHudState, BattleHudPlayer } from '@/game/battleHud'
 import { useAuthStore } from '@/stores/auth'
 import { loadGameResult, saveGameResult, type GameResult } from '@/game/results'
@@ -33,6 +35,10 @@ interface PendingAction {
 
 const auth = useAuthStore()
 const route = useRoute()
+const requestedLevelId = typeof route.query.level === 'string' ? Number(route.query.level) : 1
+const selectedLevelId = ref(
+  gameLevels.some((level) => level.id === requestedLevelId) ? requestedLevelId : 1,
+)
 const router = useRouter()
 const isResultRoute = computed(() => route.name === 'game-online-result')
 const settlement = shallowRef<GameResult | null>(null)
@@ -172,7 +178,8 @@ const resultTitle = computed(() => {
 const resultDescription = computed(() => {
   const reason = gameState.value?.endReason
   if (gameState.value?.mode === 'COOP') {
-    if (reason === 'ENEMIES_CLEARED') return '你们共同消灭了全部 8 辆敌军，成功守住基地。'
+    if (reason === 'ENEMIES_CLEARED')
+      return `你们共同消灭了全部 ${gameState.value.enemyTotal} 辆敌军，成功守住基地。`
     if (reason === 'BASE_DESTROYED') return '基地被敌军击毁。再来一局，一起守住防线。'
     if (reason === 'TEAM_DESTROYED') return '两名玩家的坦克均被击毁。'
     if (reason === 'TIME_LIMIT') return '时间已到，未能消灭全部敌军。'
@@ -225,7 +232,8 @@ const battleHud = computed<BattleHudState | null>(() => {
     })
   }
   return {
-    mode: state.mode === 'COOP' ? '双人合作 · 基地防线' : '双人对战',
+    mode:
+      state.mode === 'COOP' ? `合作 · ${initialization.value?.map.name ?? '基地防线'}` : '双人对战',
     players,
     // 击毁数来自服务端权威快照，显示合作团队总分，不伪造个人击杀归属。
     score: state.mode === 'COOP' ? state.enemyDefeated * 100 : null,
@@ -289,6 +297,11 @@ function presentSettlement(snapshot: GameSnapshot) {
   else if (snapshot.winnerUserId === null) outcome = 'DRAW'
   else outcome = snapshot.winnerUserId === auth.user.id ? 'VICTORY' : 'DEFEAT'
   const result: GameResult = {
+    ...(snapshot.mode === 'COOP' &&
+    initialization.value &&
+    gameLevels.some((level) => level.id === initialization.value?.map.id)
+      ? { levelId: initialization.value.map.id, levelName: initialization.value.map.name }
+      : {}),
     mode: snapshot.mode === 'COOP' ? 'coop' : 'pvp',
     matchId: snapshot.matchId,
     outcome,
@@ -488,7 +501,12 @@ function toggleReady() {
 function startGame() {
   void unlockGameAudio()
   if (!canStart.value || !room.value) return
-  beginAction('start', '/app/room/start', { roomId: room.value.roomId }, room.value.roomId)
+  beginAction(
+    'start',
+    '/app/room/start',
+    { roomId: room.value.roomId, levelId: selectedLevelId.value },
+    room.value.roomId,
+  )
 }
 
 function rematch() {
@@ -641,6 +659,8 @@ function applyInitialization(payload: unknown) {
   clearGame(false)
   initRoomVersion = next.roomVersion
   initialization.value = next
+  if (next.state.mode === 'COOP' && gameLevels.some((level) => level.id === next.map.id))
+    selectedLevelId.value = next.map.id
   applyGameState(next.state)
   if (bufferedState !== null) applyGameState(bufferedState)
   console.log('[GameView.applyInitialization] 收到地图，matchId =', next.matchId)
@@ -1135,6 +1155,29 @@ onUnmounted(() => {
             等待另一位玩家加入（{{ room.memberUserIds.length }} / 2）
           </li>
         </ul>
+        <section
+          v-if="room.status === 'WAITING' && room.mode === 'COOP'"
+          class="room-level-selection"
+          aria-labelledby="room-level-title"
+        >
+          <h3 id="room-level-title">{{ isOwner ? '选择本局关卡' : '等待房主选择关卡' }}</h3>
+          <GameLevelPicker
+            v-if="isOwner"
+            v-model="selectedLevelId"
+            compact
+            :disabled="!canChangeRoom"
+          />
+          <p class="field-caption">
+            {{
+              isOwner
+                ? '开始游戏时将此关卡发送给服务器，两位玩家加载相同地图。'
+                : '开局后将同步显示本局地图与敌军总数。'
+            }}
+          </p>
+        </section>
+        <p v-else-if="initialization && room.mode === 'COOP'" class="map-name">
+          第 {{ initialization.map.id }} 关 · {{ initialization.map.name }}
+        </p>
         <div class="action-row">
           <button
             v-if="room.status === 'WAITING'"
@@ -1193,11 +1236,11 @@ onUnmounted(() => {
       <h2>如何开始</h2>
       <ol>
         <li>两人分别登录，页面自动连接。一人创建房间，分享房间号或邀请链接。</li>
-        <li>双方准备后，由房主点击开始游戏。</li>
+        <li>双方准备后，由房主选择关卡并点击开始游戏。</li>
         <li>
           手机使用左侧方向键与右侧射击；电脑点击战场后使用方向键和空格。松手或切换窗口后停止操作。
         </li>
-        <li>每人 3 血，队友互不伤害。共同消灭 8 辆敌军获胜；基地被毁或全员阵亡则失败。</li>
+        <li>每人 3 血，队友互不伤害。共同消灭本关全部敌军获胜；基地被毁或全员阵亡则失败。</li>
         <li>一人阵亡后可以观战队友。结束后由房主选择再来一局。</li>
       </ol>
     </section>
@@ -1207,6 +1250,13 @@ onUnmounted(() => {
 <style scoped>
 .game-page {
   max-width: 1120px;
+}
+.room-level-selection {
+  margin: 20px 0;
+}
+.room-level-selection h3 {
+  font-size: 16px;
+  margin: 0 0 12px;
 }
 .available-rooms {
   margin-top: 24px;

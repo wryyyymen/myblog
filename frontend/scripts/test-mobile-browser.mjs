@@ -165,6 +165,17 @@ async function page(mobile = true) {
   const result = { sessionId: attached.sessionId, targetId: target.targetId, contacts: new Map() }
   await command('Runtime.enable', {}, result.sessionId)
   await command('Page.enable', {}, result.sessionId)
+  // Device metrics alone leave Chrome's desktop UA intact; emulate the actual OS too.
+  await command(
+    'Emulation.setUserAgentOverride',
+    {
+      userAgent: mobile
+        ? 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36'
+        : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+      platform: mobile ? 'Linux armv8l' : 'Win32',
+    },
+    result.sessionId,
+  )
   await command('Page.addScriptToEvaluateOnNewDocument', { source: probe }, result.sessionId)
   await viewport(result, mobile ? 390 : 1366, mobile ? 844 : 900, mobile)
   return result
@@ -395,10 +406,20 @@ async function restartSolo(page) {
 
 try {
   assert.equal((await fetch(origin + '/game')).ok, true, 'Isolated server must be running')
+  const levelDirectory = await (await fetch(origin + '/api/game/levels')).json()
+  assert.deepEqual(
+    levelDirectory.map((level) => level.enemyTotal),
+    [8, 10, 12, 14, 16],
+  )
+  assert.equal(levelDirectory[4].name, '冰原要塞')
   const solo = await page()
   await navigate(solo, '/game')
   await waitFor(solo, 'Boolean(document.querySelector(".menu-screen"))', 'mobile menu')
   await noOverflow(solo, 'menu')
+  assert.equal(await evaluate(solo, 'document.querySelectorAll(".level-card").length'), 5)
+  await viewport(solo, 320, 568)
+  await noOverflow(solo, 'five-map menu at 320px')
+  await viewport(solo, 390, 844)
   await click(solo, '.solo-option')
   await waitFor(
     solo,
@@ -409,6 +430,25 @@ try {
     await evaluate(solo, 'document.querySelector(".touch-fire-button").disabled'),
     true,
     'ready game disables combat input',
+  )
+  await click(solo, '.touch-toggle')
+  await viewport(solo, 844, 390)
+  await waitFor(
+    solo,
+    '!document.querySelector(".touch-direction-pad")',
+    'mobile manual collapse survives rotation',
+  )
+  await viewport(solo, 390, 844)
+  await waitFor(
+    solo,
+    '!document.querySelector(".touch-direction-pad")',
+    'mobile manual collapse survives returning to portrait',
+  )
+  await click(solo, '.touch-toggle')
+  await waitFor(
+    solo,
+    'Boolean(document.querySelector(".touch-direction-pad"))',
+    'mobile manual expand restores controls',
   )
   await click(solo, '.fullscreen-button')
   await waitFor(
@@ -488,7 +528,15 @@ try {
   await contactDown(solo, 1, '.touch-direction-pad [data-direction="0"]')
   await contactDown(solo, 2, '.touch-fire-button')
   const fireContact = solo.contacts.get(2)
+  await sleep(80)
   await contactMove(solo, 2, { x: fireContact.x + 12, y: fireContact.y })
+  await sleep(80)
+  await contactMove(solo, 2, { x: fireContact.x + 18, y: fireContact.y })
+  await waitFor(
+    solo,
+    `(()=>{const last=window.__mobileProbe.pointers.filter(event=>event.event==='pointerdown'&&event.fire).at(-1);return last && window.__mobileProbe.pointers.some(event=>event.event==='gotpointercapture'&&event.id===last.id)})()`,
+    'fire capture is active before releasing it',
+  )
   await evaluate(
     solo,
     `(()=>{const id=window.__mobileProbe.pointers.filter(event=>event.fire).at(-1).id;document.querySelector('.touch-fire-button').releasePointerCapture(id)})()`,
@@ -629,21 +677,32 @@ try {
   await noOverflow(solo, 'login')
 
   const desktop = await page(false)
+  // A touch-enabled Windows laptop must still start with keyboard controls only.
+  await command(
+    'Emulation.setTouchEmulationEnabled',
+    { enabled: true, maxTouchPoints: 5 },
+    desktop.sessionId,
+  )
   await navigate(desktop, '/game/single')
   await waitFor(
     desktop,
     `document.querySelector('.play-button') && !document.querySelector('.play-button').disabled`,
     'desktop solo ready',
   )
-  // Disabling emulation restores physical host capability, which can still be touch-enabled.
-  // Use the product's manual toggle to exercise the no-control fullscreen layout in either case.
-  if (await evaluate(desktop, 'Boolean(document.querySelector(".touch-direction-pad"))')) {
-    await click(desktop, '.touch-toggle')
-  }
+  assert.equal(await evaluate(desktop, 'navigator.maxTouchPoints'), 5)
   await waitFor(
     desktop,
     '!document.querySelector(".touch-direction-pad")',
-    'desktop keyboard-only layout',
+    'touch-enabled desktop defaults to collapsed controls',
+  )
+  await evaluate(
+    desktop,
+    "window.dispatchEvent(new PointerEvent('pointerdown', {pointerType: 'touch'}))",
+  )
+  assert.equal(
+    await evaluate(desktop, 'Boolean(document.querySelector(".touch-direction-pad"))'),
+    false,
+    'touching a desktop screen does not automatically open controls',
   )
   await click(desktop, '.fullscreen-button')
   await waitFor(
@@ -668,6 +727,101 @@ try {
   await checkBattleLayout(desktop, 'desktop controls hidden again', false)
   await click(desktop, '.fullscreen-button')
   await waitFor(desktop, '!document.fullscreenElement', 'desktop fullscreen exit')
+
+  // The saved record is a UI fixture; combat victory is exercised by the pure engine tests.
+  const levels = await page()
+  await navigate(levels, '/game')
+  await waitFor(levels, 'document.querySelectorAll(".level-card").length===5', 'five map cards')
+  for (let id = 1; id <= 5; id++) {
+    await click(levels, `[data-level-id="${id}"]`)
+    assert.equal(
+      await evaluate(
+        levels,
+        `new URL(document.querySelector('.solo-option').href).searchParams.get('level')`,
+      ),
+      String(id),
+    )
+  }
+  await screenshot(levels, 'map-level-selection-mobile.png')
+  await click(levels, '.solo-option')
+  await waitFor(
+    levels,
+    `document.querySelector('.solo-heading h1')?.textContent.includes('第 5 关') && !document.querySelector('.play-button')?.disabled`,
+    'chosen fifth map',
+  )
+  assert.ok(
+    await evaluate(levels, `document.querySelector('.battle-hud').textContent.includes('/ 16')`),
+  )
+  const savedVictory = {
+    mode: 'single',
+    matchId: 'browser-level-result',
+    outcome: 'VICTORY',
+    reason: '关卡完成',
+    score: 1400,
+    defeated: 14,
+    enemyTotal: 14,
+    elapsedSeconds: 60,
+    remainingHp: 2,
+    maxHp: 3,
+    baseAlive: true,
+    levelId: 4,
+    levelName: '密林伏击',
+  }
+  await evaluate(
+    levels,
+    `sessionStorage.setItem('tank:single:last-result', ${JSON.stringify(JSON.stringify(savedVictory))})`,
+  )
+  // A previous result must never change a newly selected battlefield on restart.
+  await navigate(levels, '/game/single?level=3')
+  await waitFor(
+    levels,
+    `document.querySelector('.play-button') && !document.querySelector('.play-button').disabled`,
+    'third level with old result in storage',
+  )
+  await restartSolo(levels)
+  assert.equal(await evaluate(levels, 'new URL(location.href).searchParams.get("level")'), '3')
+  assert.ok(
+    await evaluate(levels, `document.querySelector('.battle-hud').textContent.includes('/ 12')`),
+  )
+  await evaluate(
+    levels,
+    `sessionStorage.setItem('tank:single:last-result', ${JSON.stringify(JSON.stringify(savedVictory))})`,
+  )
+  await navigate(levels, '/game/single/result?level=4')
+  await waitFor(
+    levels,
+    `Boolean(${button('下一关')}) && !(${button('下一关')}).disabled`,
+    'restored victory offers next level',
+  )
+  await clickText(levels, '下一关')
+  await waitFor(
+    levels,
+    `location.pathname==='/game/single' && document.querySelector('.solo-heading h1')?.textContent.includes('第 5 关') && !document.querySelector('.game-overlay')`,
+    'next level starts fifth map',
+  )
+  await restartSolo(levels)
+  assert.equal(await evaluate(levels, 'new URL(location.href).searchParams.get("level")'), '5')
+  const finalVictory = {
+    ...savedVictory,
+    levelId: 5,
+    levelName: '冰原要塞',
+    enemyTotal: 16,
+    defeated: 16,
+    score: 1600,
+  }
+  await evaluate(
+    levels,
+    `sessionStorage.setItem('tank:single:last-result', ${JSON.stringify(JSON.stringify(finalVictory))})`,
+  )
+  await navigate(levels, '/game/single/result?level=5')
+  await waitFor(
+    levels,
+    `document.querySelector('.result-level')?.textContent.includes('最后一关已完成')`,
+    'final victory has no sixth level',
+  )
+  assert.equal(await evaluate(levels, `Boolean(${button('下一关')})`), false)
+  await noOverflow(levels, 'map result')
+  await screenshot(levels, 'map-final-result-mobile.png')
 
   const owner = await page()
   const teammate = await page(false)
@@ -702,6 +856,7 @@ try {
     'both players joined',
   )
   await noOverflow(owner, 'mobile waiting room')
+  await click(owner, '.room-level-selection [data-level-id="5"]')
   await clickText(owner, '准备')
   await clickText(teammate, '准备')
   await clickText(owner, '开始游戏')
@@ -711,7 +866,13 @@ try {
       'Boolean(window.__mobileProbe.last["game:start"]) && document.querySelector(".phase-badge")?.textContent.includes("游戏进行中")',
       'cooperative game started',
     )
+    assert.equal(await evaluate(peer, 'window.__mobileProbe.last["game:init"].map.id'), 5)
+    assert.equal(await evaluate(peer, 'window.__mobileProbe.last["game:start"].enemyTotal'), 16)
   }
+  assert.deepEqual(
+    await evaluate(owner, 'window.__mobileProbe.last["game:init"].map.seed'),
+    await evaluate(teammate, 'window.__mobileProbe.last["game:init"].map.seed'),
+  )
   await command('Target.activateTarget', { targetId: owner.targetId })
   await fallbackFullscreen(owner)
   await checkBattleLayout(owner, 'cooperative portrait')
@@ -765,7 +926,7 @@ try {
   await noOverflow(owner, 'cooperative result')
   assert.equal(errors.length, 0, errors.join('\n'))
   console.log(
-    'Mobile browser checks passed: real multi-touch move/fire and independent release; cancel/capture cleanup; keyboard coexistence; pause/restart/background/rotation cleanup; native and fallback fullscreen with controls; proportional mobile layouts; menu/login/lobby/results; authoritative two-player movement and matching snapshots; no runtime exceptions.',
+    'Mobile browser checks passed: five map cards and anonymous level directory; selected map and next-level/retry/final-result flow; real multi-touch move/fire and independent release; cancel/capture cleanup; keyboard coexistence; pause/restart/background/rotation cleanup; native and fallback fullscreen with controls; proportional mobile layouts; authoritative two-player level 5 maps and matching 16-enemy snapshots; no runtime exceptions.',
   )
   console.log(JSON.stringify(measurements, null, 2))
 } finally {

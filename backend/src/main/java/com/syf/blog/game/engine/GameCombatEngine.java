@@ -310,7 +310,7 @@ public class GameCombatEngine {
         } else if (alivePlayers == 0) {
             result = "DEFEAT";
             reason = "TEAM_DESTROYED";
-        } else if (defeated == GameCoopEngine.ENEMY_TOTAL) {
+        } else if (defeated == match.getLevel().getEnemyTotal()) {
             result = "VICTORY";
             reason = "ENEMIES_CLEARED";
         } else if (match.getTick() >= MATCH_DURATION_TICKS) {

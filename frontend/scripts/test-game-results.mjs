@@ -55,6 +55,22 @@ test('invalid stored outcomes, numbers and health cannot become a result', () =>
   assert.equal(readGameResult(null), null)
 })
 
+test('results preserve the selected level across reload and reject corrupt level metadata', () => {
+  const state = {
+    ...finishedState(),
+    levelId: 4,
+    levelName: '密林伏击',
+    totalEnemies: 14,
+    kills: 14,
+  }
+  const result = createSinglePlayerResult(state, 'level-4')
+  assert.equal(result.levelId, 4)
+  assert.equal(result.levelName, '密林伏击')
+  assert.deepEqual(readGameResult(result), result)
+  for (const invalid of [{ levelId: 0 }, { levelId: 6 }, { levelName: '' }, { levelName: null }])
+    assert.equal(readGameResult({ ...result, ...invalid }), null)
+})
+
 test('only the public result fields are copied from a stored record', () => {
   const valid = createSinglePlayerResult(finishedState(), 'match-1')
   const checked = readGameResult({ ...valid, token: 'not-a-real-token', controls: {} })

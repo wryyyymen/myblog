@@ -30,7 +30,7 @@ public class GamePlayController {
     @SendToUser(value = "/queue/replies", broadcast = false)
     public GameWsResponse<RoomResponse> start(@Valid @Payload StartGameRequest request, Principal principal) {
         Long userId = Long.valueOf(principal.getName());
-        RoomResponse room = gameMatchService.start(userId, request.getRoomId());
+        RoomResponse room = gameMatchService.start(userId, request.getRoomId(), request.getLevelId());
         GameWsResponse<RoomResponse> response = new GameWsResponse<RoomResponse>("room:started", room);
         return response;
     }

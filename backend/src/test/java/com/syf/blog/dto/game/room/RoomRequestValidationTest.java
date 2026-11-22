@@ -31,6 +31,19 @@ class RoomRequestValidationTest {
     }
 
     @Test
+    void startAcceptsMissingLevelForCompatibilityAndRejectsOutOfRangeSelection() {
+        StartGameRequest request = new StartGameRequest();
+        request.setRoomId("current-room");
+        assertTrue(validator.validate(request).isEmpty());
+        request.setLevelId(5);
+        assertTrue(validator.validate(request).isEmpty());
+        request.setLevelId(0);
+        assertEquals(1, validator.validate(request).size());
+        request.setLevelId(6);
+        assertEquals(1, validator.validate(request).size());
+    }
+
+    @Test
     void explicitTrueAndFalseAreBothValidReadyValues() {
         PlayerReadyRequest request = new PlayerReadyRequest();
         request.setRoomId("current-room");
