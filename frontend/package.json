@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
-    "test:game": "node --test scripts/test-game-maps.mjs scripts/test-singleplayer.mjs scripts/test-network-protocol.mjs scripts/test-interpolation.mjs scripts/test-game-results.mjs scripts/test-audio-events.mjs scripts/test-input-state.mjs scripts/test-touch-defaults.mjs",
+    "test:game": "node --test scripts/test-game-maps.mjs scripts/test-singleplayer.mjs scripts/test-network-protocol.mjs scripts/test-interpolation.mjs scripts/test-game-results.mjs scripts/test-best-score.mjs scripts/test-audio-events.mjs scripts/test-input-state.mjs scripts/test-touch-defaults.mjs",
     "test:mobile": "node scripts/test-mobile-browser.mjs",
     "lint": "run-s \"lint:*\"",
     "lint:oxlint": "oxlint . --fix",

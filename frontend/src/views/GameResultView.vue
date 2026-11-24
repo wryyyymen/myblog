@@ -93,7 +93,14 @@ const teammateSprite = `${import.meta.env.BASE_URL}resources/png/players/tank_T1
       <dl v-if="result" class="result-stats">
         <div v-if="result.score !== null" class="result-score">
           <dt>{{ result.mode === 'coop' ? '团队得分' : '本局得分' }}</dt>
-          <dd>{{ String(result.score).padStart(4, '0') }}</dd>
+          <dd>
+            {{ String(result.score).padStart(4, '0') }}
+            <span v-if="result.isNewRecord" class="result-record">新纪录</span>
+          </dd>
+        </div>
+        <div v-if="result.bestScore !== undefined" class="result-best">
+          <dt>历史最佳</dt>
+          <dd>{{ String(result.bestScore).padStart(4, '0') }}</dd>
         </div>
         <div v-if="result.enemyTotal > 0">
           <dt>击毁敌军</dt>
@@ -260,6 +267,20 @@ h1:focus {
 .result-score dd {
   color: #ffe08a;
   font-size: 34px;
+}
+.result-record {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 2px 8px;
+  border: 1px solid #67e8a7;
+  border-radius: 4px;
+  color: #67e8a7;
+  font: 600 12px sans-serif;
+  vertical-align: middle;
+}
+.result-best dd {
+  color: #a6bca9;
+  font-size: 20px;
 }
 .result-stats .result-base {
   font: 600 16px sans-serif;

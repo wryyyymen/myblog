@@ -21,6 +21,7 @@ import {
   createSinglePlayerResult,
   loadGameResult,
   saveGameResult,
+  updateBestScore,
   type GameResult,
 } from '@/game/results'
 import { observeSinglePlayerAudio, stopGameAudio, unlockGameAudio } from '@/game/audio/gameAudio'
@@ -98,8 +99,16 @@ function showResult() {
   if (ending === null || result.value?.matchId === ending.matchId) return
   clearInput()
   canvasRef.value?.blur()
-  result.value = ending
-  saveGameResult(resultStorageKey, ending)
+
+  // 先并入历史最佳，再存本次结算：结算页要同时显示本局得分和最佳分。
+  const record = updateBestScore(ending)
+  const shown =
+    record === null
+      ? ending
+      : { ...ending, bestScore: record.best.score, isNewRecord: record.isNewRecord }
+
+  result.value = shown
+  saveGameResult(resultStorageKey, shown)
   void router
     .replace({ name: 'game-single-result', query: { level: game.value.levelId } })
     .catch(() => {
