@@ -236,6 +236,10 @@ export function playGameSound(sound: GameSound) {
     const source = activeContext.createBufferSource()
     const gain = activeContext.createGain()
     source.buffer = buffer
+    // 坦克和砖块的爆炸音效以 1.2 倍速播放
+    if (sound === 'destroy' || sound === 'brick') {
+      source.playbackRate.value = 1.2
+    }
     gain.gain.value = definition.gain
     source.connect(gain)
     gain.connect(destination)
@@ -246,7 +250,12 @@ export function playGameSound(sound: GameSound) {
       gain.disconnect()
     }
     try {
-      source.start()
+      if (sound === 'brick') {
+        // 立即播放，跳过音频开头的 0.2 秒
+        source.start(0, 0.06)
+      } else {
+        source.start()
+      }
     } catch {
       activeSources.delete(source)
       source.disconnect()

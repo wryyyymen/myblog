@@ -1,6 +1,7 @@
 package com.syf.blog.game.runtime;
 
 import com.syf.blog.dto.game.GameMapResponse;
+import com.syf.blog.game.map.GameLevelDefinition;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -42,6 +43,10 @@ public class GameMatch {
 
     @Setter
     private String mode = "PVP";
+
+    // 开局后固定使用本关模板，地图、敌人总数和速度来自同一份配置。
+    @Setter
+    private GameLevelDefinition level;
 
     // AI 使用负数身份，永远不能通过客户端输入接口操作。
     private final List<TankState> enemies = new ArrayList<TankState>();

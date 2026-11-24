@@ -9,7 +9,8 @@ import com.syf.blog.dto.game.ws.GameWsResponse;
 import com.syf.blog.exception.BusinessException;
 import com.syf.blog.game.runtime.GameBroadcast;
 import com.syf.blog.game.engine.GameArenaMapFactory;
-import com.syf.blog.game.engine.GameCoopEngine;
+import com.syf.blog.game.map.GameLevelCatalog;
+import com.syf.blog.game.map.GameLevelDefinition;
 import com.syf.blog.service.GameMapService;
 import com.syf.blog.websocket.game.GameRoomNotifier;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,12 @@ public class GameMatchService {
     private final GameArenaMapFactory arenaMapFactory = new GameArenaMapFactory();
 
     public RoomResponse start(Long userId, String roomId) {
+        return start(userId, roomId, null);
+    }
+
+    public RoomResponse start(Long userId, String roomId, Integer levelId) {
+        // 先验证选关，错误输入不能把等待房间切到 LOADING。
+        GameLevelDefinition level = GameLevelCatalog.getDefault().getById(levelId);
         RoomResponse loading = gameRoomService.beginStart(userId, roomId, System.currentTimeMillis());
         gameRoomNotifier.notifyRoomUpdated(loading);
 
@@ -39,8 +46,7 @@ public class GameMatchService {
             // 地图服务在自己的只读事务内查询。此处没有持有房间锁，也不在物理 tick 中。
             GameMapResponse map;
             if ("COOP".equals(loading.getMode())) {
-                GameCoopEngine coopEngine = new GameCoopEngine();
-                map = coopEngine.createMap();
+                map = level.createMap();
             } else {
                 map = gameMapService.getById(1L);
                 map = arenaMapFactory.forOnlineMatch(map);

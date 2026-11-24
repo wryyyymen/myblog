@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import AppIcon from '@/components/AppIcon.vue'
 import BlogArtwork from '@/components/BlogArtwork.vue'
-import { ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, ref } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
 
 const username = ref('')
 const password = ref('')
@@ -10,6 +10,10 @@ const confirmPassword = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
 const registered = ref(false)
+const route = useRoute()
+const returningToGame = computed(
+  () => typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/game'),
+)
 
 async function handleRegister() {
   if (loading.value) return
@@ -77,8 +81,16 @@ async function handleRegister() {
           <div class="auth-success" role="status">
             <AppIcon name="check" />
             <h1 id="register-title">注册成功</h1>
-            <p>你的账号已经准备好了，<br />登录后就可以开始写第一篇文章。</p>
-            <RouterLink class="button button-primary button-block" to="/login"
+            <p>
+              {{
+                returningToGame
+                  ? '账号已准备好，登录后继续加入合作房间。'
+                  : '你的账号已经准备好了，登录后就可以开始写第一篇文章。'
+              }}
+            </p>
+            <RouterLink
+              class="button button-primary button-block"
+              :to="{ path: '/login', query: { redirect: route.query.redirect } }"
               >去登录<AppIcon name="arrow-right"
             /></RouterLink>
           </div>
@@ -95,6 +107,9 @@ async function handleRegister() {
                 maxlength="50"
                 placeholder="给自己取一个名字"
                 autocomplete="username"
+                autocapitalize="none"
+                :spellcheck="false"
+                enterkeyhint="next"
                 :disabled="loading"
                 required
               />
@@ -108,6 +123,7 @@ async function handleRegister() {
                 minlength="8"
                 placeholder="至少 8 位字符"
                 autocomplete="new-password"
+                enterkeyhint="next"
                 :disabled="loading"
                 required
               />
@@ -121,6 +137,7 @@ async function handleRegister() {
                 minlength="8"
                 placeholder="再输入一次密码"
                 autocomplete="new-password"
+                enterkeyhint="done"
                 :disabled="loading"
                 required
               />
@@ -129,7 +146,12 @@ async function handleRegister() {
             <button class="button button-primary button-block" type="submit" :disabled="loading">
               {{ loading ? '注册中……' : '注册账号' }}<AppIcon name="arrow-right" />
             </button>
-            <p class="auth-switch">已有账号？<RouterLink to="/login">去登录</RouterLink></p>
+            <p class="auth-switch">
+              已有账号？<RouterLink
+                :to="{ path: '/login', query: { redirect: route.query.redirect } }"
+                >去登录</RouterLink
+              >
+            </p>
           </form>
         </template>
       </section>

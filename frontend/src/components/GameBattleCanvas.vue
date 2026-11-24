@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import BattleFrame from '@/components/BattleFrame.vue'
 import type { BattleHudState } from '@/game/battleHud'
 import type { PlayerState } from '@/game/playRenderer'
 import { interpolatePosition, interpolationDuration } from '@/game/network/interpolation'
 import { loadSinglePlayerAssets, type SinglePlayerAssets } from '@/game/singleplayer/assets'
 import { bindDirectionKeys } from '@/game/keyboardInput'
+import { GameInputState, type InputDirection } from '@/game/inputState'
+import { unlockGameAudio } from '@/game/audio/gameAudio'
 import {
   BATTLE_COLORS,
   drawTankSprite,
@@ -52,14 +54,24 @@ interface BulletTransition {
 }
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+// 显示缩放沿用地图长宽比，画布内部坐标和联机状态不变。
+const battlefieldAspectRatio = computed(() => {
+  const seed = props.initialization?.map.seed
+  const rows = seed?.length ?? 0
+  const columns = seed?.[0]?.length ?? 0
+  if (rows === 0 || columns === 0) return 1
+  return columns / rows
+})
 const loading = ref(false)
 const focused = ref(false)
 const resourcesReady = ref(false)
+const inputState = new GameInputState()
+const inputResetKey = ref(0)
 let mounted = false
 let disposed = false
 let loadGeneration = 0
 let animationId: number | null = null
-let releaseKeys: (() => void) | undefined
+let keyboardBinding: ReturnType<typeof bindDirectionKeys> | undefined
 let mapCanvas: HTMLCanvasElement | null = null
 let foliageCanvas: HTMLCanvasElement | null = null
 let waterCanvas: HTMLCanvasElement | null = null
@@ -84,26 +96,60 @@ function setFire(held: boolean) {
   emit('fire', held)
 }
 
+/** 输入来源只在这里汇总，网络发送仍由 GameView 的既有回调处理。 */
+function applyInput() {
+  if (!canControl()) inputState.clearAll()
+  const input = inputState.read()
+  // 先停火再停止移动，与现有清理顺序一致。
+  setFire(input.fireHeld)
+  emit('direction', input.direction)
+}
+
 function clearControls() {
-  setFire(false)
-  emit('direction', null)
+  inputState.clearAll()
+  keyboardBinding?.reset()
+  inputResetKey.value++
+  applyInput()
+}
+
+function handleKeyboardDirection(direction: InputDirection) {
+  inputState.setDirection('keyboard', canControl() ? direction : null)
+  applyInput()
+}
+
+function handleTouchDirection(direction: InputDirection) {
+  if (direction !== null) void unlockGameAudio()
+  inputState.setDirection('touch', canControl() ? direction : null)
+  applyInput()
+}
+
+function handleTouchFire(held: boolean) {
+  if (held) void unlockGameAudio()
+  inputState.setFire('touch', canControl() && held)
+  applyInput()
 }
 
 function handleFireDown(event: KeyboardEvent) {
   if (event.code !== 'Space') return
   event.preventDefault()
-  if (canControl() && !event.repeat) setFire(true)
+  if (!event.repeat) {
+    inputState.setFire('keyboard', canControl())
+    applyInput()
+  }
 }
 
 function handleFireUp(event: KeyboardEvent) {
   if (event.code !== 'Space' || !fireHeld) return
   event.preventDefault()
-  setFire(false)
+  inputState.setFire('keyboard', false)
+  applyInput()
 }
 
 function handleCanvasBlur() {
   focused.value = false
-  clearControls()
+  // 画布失焦只清键盘；触屏由 pointerup/cancel 和全局失焦负责释放。
+  inputState.clear('keyboard')
+  applyInput()
 }
 
 function handleWindowBlur() {
@@ -452,10 +498,7 @@ onMounted(() => {
   const canvas = canvasRef.value
   if (canvas) {
     drawingContext = canvas.getContext('2d', { alpha: false })
-    releaseKeys = bindDirectionKeys(canvas, (direction) => {
-      if (canControl()) emit('direction', direction)
-      else emit('direction', null)
-    })
+    keyboardBinding = bindDirectionKeys(canvas, handleKeyboardDirection)
     canvas.addEventListener('keydown', handleFireDown)
   }
   window.addEventListener('keyup', handleFireUp)
@@ -468,7 +511,7 @@ onMounted(() => {
 onUnmounted(() => {
   disposed = true
   ++loadGeneration
-  releaseKeys?.()
+  keyboardBinding?.dispose()
   clearControls()
   canvasRef.value?.removeEventListener('keydown', handleFireDown)
   window.removeEventListener('keyup', handleFireUp)
@@ -488,26 +531,37 @@ onUnmounted(() => {
     <p v-if="loading" class="canvas-note" role="status">正在加载地图和坦克……</p>
     <p v-else-if="playing" class="canvas-note" :class="{ 'is-focused': focused }" role="status">
       {{
-        focused ? 'WASD / 方向键移动 · 按住空格射击' : '点击战场，使用 WASD / 方向键移动，空格射击'
+        focused
+          ? '触屏可用方向区和射击按钮；键盘已就绪。'
+          : '手机使用方向区和射击按钮；电脑点击战场后使用 WASD / 方向键和空格。'
       }}
     </p>
     <p v-else-if="state?.status === 'FINISHED'" class="canvas-note">本局已结束，最终战场已保留。</p>
     <p v-else class="canvas-note">开局后在这里控制你的坦克。</p>
-    <BattleFrame :hud="hud">
+    <BattleFrame
+      :hud="hud"
+      :aspect-ratio="battlefieldAspectRatio"
+      :controls-enabled="playing && resourcesReady"
+      :input-reset-key="inputResetKey"
+      @direction="handleTouchDirection"
+      @fire="handleTouchFire"
+    >
       <canvas
         ref="canvasRef"
         width="624"
         height="624"
         tabindex="0"
-        aria-label="坦克战场。点击获得焦点，使用 WASD 或方向键移动，空格射击，失去焦点停止操作。"
+        aria-label="坦克战场。可使用屏幕方向区移动、按住射击按钮，或点击画布使用WASD、方向键和空格操作。"
         @pointerdown="focusCanvas"
         @focus="focused = true"
         @blur="handleCanvasBlur"
         >当前浏览器不支持 Canvas。</canvas
       >
       <template #footer
-        ><span>WASD / 方向键移动 · 空格射击</span
-        ><span>{{ focused ? '键盘已就绪' : '点击战场后使用键盘' }}</span></template
+        ><span class="keyboard-hint">WASD / 方向键移动 · 空格射击</span
+        ><span class="keyboard-hint">{{
+          focused ? '键盘已就绪' : '点击战场后使用键盘'
+        }}</span></template
       >
     </BattleFrame>
   </section>

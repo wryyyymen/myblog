@@ -18,6 +18,8 @@ import com.syf.blog.dto.game.ws.GameWsResponse;
 import com.syf.blog.game.engine.GameMovementEngine;
 import com.syf.blog.game.engine.GameCombatEngine;
 import com.syf.blog.game.engine.GameCoopEngine;
+import com.syf.blog.game.map.GameLevelCatalog;
+import com.syf.blog.game.map.GameLevelDefinition;
 import com.syf.blog.dto.game.play.EnemyResponse;
 import com.syf.blog.dto.game.play.BaseResponse;
 import com.syf.blog.game.runtime.GameBroadcast;
@@ -413,7 +415,11 @@ public class GameRoomService {
                 List<Long> members = new ArrayList<Long>(room.getMemberUserIds());
                 GameMatch match;
                 if ("COOP".equals(room.getMode())) {
-                        match = coopEngine.createMatch(roomId, matchId, members);
+                        if (map == null || map.id() == null || map.id() < 1L || map.id() > 5L) {
+                                throw new BusinessException(HttpStatus.BAD_REQUEST, "合作关卡不存在");
+                        }
+                        GameLevelDefinition level = GameLevelCatalog.getDefault().getById(map.id().intValue());
+                        match = coopEngine.createMatch(roomId, matchId, members, level, map);
                 } else {
                         match = movementEngine.createMatch(roomId, matchId, map, members);
                 }
@@ -761,7 +767,7 @@ public class GameRoomService {
                         enemies.add(EnemyResponse.from(enemy));
                         if (enemy.getHp() <= 0) defeated++;
                 }
-                int enemyTotal = "COOP".equals(match.getMode()) ? GameCoopEngine.ENEMY_TOTAL : 0;
+                int enemyTotal = "COOP".equals(match.getMode()) ? match.getLevel().getEnemyTotal() : 0;
                 GameStateResponse response = new GameStateResponse(room.getRoomId(), room.getMatchId(), status,
                                 match.getTick(), nowMillis, tanks, bullets, destroyedCells,
                                 match.getWinnerUserId(), match.getEndReason(), match.getMode(), enemies,

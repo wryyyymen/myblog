@@ -7,6 +7,7 @@ import com.syf.blog.config.GameLoopConfig;
 import com.syf.blog.config.GameWebSocketConfig;
 import com.syf.blog.controller.GameMessageController;
 import com.syf.blog.controller.GamePlayController;
+import com.syf.blog.controller.GameLevelController;
 import com.syf.blog.domain.BlogUser;
 import com.syf.blog.dto.game.GameMapResponse;
 import com.syf.blog.dto.user.UserResponse;
@@ -16,6 +17,7 @@ import com.syf.blog.game.engine.GameArenaMapFactory;
 import com.syf.blog.service.GameMapService;
 import com.syf.blog.service.game.GameMatchService;
 import com.syf.blog.service.game.GameRoomService;
+import com.syf.blog.service.game.GameLevelService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import lombok.Getter;
@@ -85,7 +87,8 @@ public class GameBrowserTestServer {
     @Import({GameWebSocketConfig.class, GameLoopConfig.class, GameHandshakeInterceptor.class,
             GameHandshakeHandler.class, GameRoomService.class, GameMatchService.class,
             GameRoomNotifier.class, GamePresenceListener.class, GameMessageController.class,
-            GamePlayController.class, GlobalExceptionHandler.class, TestHttpController.class,
+            GamePlayController.class, GameLevelController.class, GameLevelService.class,
+            GlobalExceptionHandler.class, TestHttpController.class,
             TestSpaController.class})
     static class TestApplication {
 

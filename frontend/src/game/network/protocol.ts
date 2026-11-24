@@ -265,12 +265,12 @@ export function readGameState(value: unknown): GameSnapshot | null {
     return null
   const bullets: BulletSnapshot[] = []
   const enemies: EnemySnapshot[] = []
-  if (!Array.isArray(value.enemies) || value.enemies.length > 8) return null
+  if (!Array.isArray(value.enemies) || value.enemies.length > 100) return null
   for (const enemy of value.enemies) {
     if (
       !isObject(enemy) ||
       !isInteger(enemy.id, 1) ||
-      enemy.id > 8 ||
+      enemy.id > 100 ||
       typeof enemy.x !== 'number' ||
       !Number.isFinite(enemy.x) ||
       enemy.x < 0 ||
@@ -326,7 +326,8 @@ export function readGameState(value: unknown): GameSnapshot | null {
     value.enemySpawned !== enemies.length ||
     value.enemyDefeated !== enemies.filter((enemy) => enemy.hp === 0).length ||
     value.enemySpawned > value.enemyTotal ||
-    value.enemyTotal > 8 ||
+    enemies.some((enemy) => enemy.id > (value.enemyTotal as number)) ||
+    value.enemyTotal > 100 ||
     (value.teamResult !== null &&
       value.teamResult !== 'VICTORY' &&
       value.teamResult !== 'DEFEAT' &&
@@ -336,7 +337,7 @@ export function readGameState(value: unknown): GameSnapshot | null {
   if (
     value.mode === 'COOP' &&
     (base === null ||
-      value.enemyTotal !== 8 ||
+      value.enemyTotal < 1 ||
       value.winnerUserId !== null ||
       (value.status === 'FINISHED') !== (value.teamResult !== null))
   )

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { GameResult } from '@/game/results'
 import GameAudioControls from '@/components/GameAudioControls.vue'
 
@@ -12,6 +12,7 @@ const props = withDefaults(
     notice?: string
     error?: string
     showLobby?: boolean
+    canNextLevel?: boolean
   }>(),
   {
     retryLabel: '再来一局',
@@ -19,11 +20,20 @@ const props = withDefaults(
     notice: '',
     error: '',
     showLobby: true,
+    canNextLevel: false,
   },
 )
-defineEmits<{ retry: []; lobby: []; menu: [] }>()
+defineEmits<{ retry: []; nextLevel: []; lobby: []; menu: [] }>()
 const titleRef = ref<HTMLHeadingElement | null>(null)
-onMounted(() => titleRef.value?.focus())
+function focusTitle() {
+  if (!document.fullscreenElement) titleRef.value?.focus()
+}
+onMounted(() => {
+  focusTitle()
+  // 原生全屏退出是异步的，退出完成后再把键盘焦点交给结算标题。
+  document.addEventListener('fullscreenchange', focusTitle)
+})
+onUnmounted(() => document.removeEventListener('fullscreenchange', focusTitle))
 
 const title = computed(() => {
   if (!props.result) return '暂无结算记录'
@@ -65,6 +75,14 @@ const teammateSprite = `${import.meta.env.BASE_URL}resources/png/players/tank_T1
       </div>
       <span class="result-tag">{{ outcomeTag }}</span>
       <h1 id="result-title" ref="titleRef" tabindex="-1">{{ title }}</h1>
+      <p v-if="result?.levelName" class="result-level">
+        第 {{ result.levelId }} 关 · {{ result.levelName
+        }}<template
+          v-if="result.mode === 'single' && result.levelId === 5 && result.outcome === 'VICTORY'"
+        >
+          · 最后一关已完成</template
+        >
+      </p>
       <p class="result-reason">
         {{
           result
@@ -101,6 +119,15 @@ const teammateSprite = `${import.meta.env.BASE_URL}resources/png/players/tank_T1
       <p v-if="error" class="result-error" role="alert">{{ error }}</p>
       <p v-if="notice" class="result-notice" role="status">{{ notice }}</p>
       <div class="result-actions">
+        <button
+          v-if="canNextLevel"
+          class="button result-primary"
+          type="button"
+          :disabled="busy"
+          @click="$emit('nextLevel')"
+        >
+          下一关
+        </button>
         <button
           class="button result-primary"
           type="button"
@@ -153,6 +180,7 @@ const teammateSprite = `${import.meta.env.BASE_URL}resources/png/players/tank_T1
   color: #9eb59f;
   font-size: 12px;
   text-align: left;
+  flex-wrap: wrap;
 }
 .result-emblem {
   display: flex;
@@ -191,6 +219,12 @@ h1:focus {
   color: #b6c6b8;
   font-size: 14px;
   line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+.result-level {
+  color: #c3d8a0;
+  font-size: 14px;
+  line-height: 1.8;
 }
 .result-stats {
   display: flex;
@@ -259,6 +293,16 @@ h1:focus {
   font-size: 13px;
   line-height: 1.8;
 }
+@media (any-pointer: coarse) {
+  .result-actions .button {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .result-topline :deep(.audio-toggle) {
+    min-height: 44px;
+    font-size: 13px;
+  }
+}
 @media (max-width: 520px) {
   .result-page {
     padding-top: 26px;
@@ -266,14 +310,41 @@ h1:focus {
   .result-screen {
     padding: 18px 16px 26px;
   }
+  .result-topline {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .result-topline :deep(.audio-toggle) {
+    min-height: 44px;
+    font-size: 13px;
+  }
+  .result-topline :deep(.game-audio-controls) {
+    max-width: 100%;
+  }
   .result-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 22px 12px;
   }
   .result-stats > div {
-    min-width: 112px;
+    min-width: 0;
+  }
+  .result-stats .result-score {
+    grid-column: 1 / -1;
+  }
+  .result-stats dd {
+    overflow-wrap: anywhere;
+  }
+  .result-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
   }
   .result-actions .button {
-    flex: 1 1 120px;
+    min-height: 48px;
+    min-width: 0;
+    width: 100%;
+    font-size: 14px;
   }
 }
 </style>

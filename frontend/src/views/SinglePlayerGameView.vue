@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, triggerRef } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, triggerRef, watch } from 'vue'
 import { bindDirectionKeys } from '@/game/keyboardInput'
+import { GameInputState, type InputDirection } from '@/game/inputState'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import BattleFrame from '@/components/BattleFrame.vue'
+import { gameLevels, getGameLevel } from '@/game/maps/catalog'
 import type { BattleHudState } from '@/game/battleHud'
 import {
   createSinglePlayerGame,
@@ -26,21 +28,35 @@ import { observeSinglePlayerAudio, stopGameAudio, unlockGameAudio } from '@/game
 const route = useRoute()
 const router = useRouter()
 const resultStorageKey = 'tank:single:last-result'
-const result = shallowRef<GameResult | null>(loadGameResult(resultStorageKey))
+const result = shallowRef<GameResult | null>(
+  route.name === 'game-single-result' ? loadGameResult(resultStorageKey) : null,
+)
 const showingResult = computed(() => route.name === 'game-single-result')
 const restarting = ref(false)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
-const game = shallowRef(createSinglePlayerGame())
+function levelIdFromRoute(): number {
+  const queryId = typeof route.query.level === 'string' ? Number(route.query.level) : NaN
+  if (gameLevels.some((level) => level.id === queryId)) return queryId
+  if (showingResult.value && result.value?.levelId) return result.value.levelId
+  return 1
+}
+const game = shallowRef(createSinglePlayerGame(Date.now(), levelIdFromRoute()))
+const currentLevel = computed(() => getGameLevel(game.value.levelId))
+const canNextLevel = computed(
+  () => assetsReady.value && result.value?.outcome === 'VICTORY' && (result.value.levelId ?? 5) < 5,
+)
 const errorMessage = ref('')
 const assetsReady = ref(false)
 const controls: PlayerControls = { direction: null, fireHeld: false }
+const inputState = new GameInputState()
+const inputResetKey = ref(0)
 const hasFocus = ref(false)
 const elapsedText = computed(() => {
   const seconds = Math.floor(game.value.time)
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 })
 const battleHud = computed<BattleHudState>(() => ({
-  mode: '单人闯关 · 基地防线',
+  mode: `第 ${game.value.levelId} 关 · ${game.value.levelName}`,
   players: [
     {
       role: 'self',
@@ -68,7 +84,7 @@ const overlayTitle = computed(() => {
 })
 let animationId = 0
 let disposed = false
-let releaseKeys: (() => void) | undefined
+let keyboardBinding: ReturnType<typeof bindDirectionKeys> | undefined
 let assets: SinglePlayerAssets | null = null
 let matchId = createMatchId()
 
@@ -84,9 +100,11 @@ function showResult() {
   canvasRef.value?.blur()
   result.value = ending
   saveGameResult(resultStorageKey, ending)
-  void router.replace({ name: 'game-single-result' }).catch(() => {
-    errorMessage.value = '结算页面打开失败，请返回菜单后重试。'
-  })
+  void router
+    .replace({ name: 'game-single-result', query: { level: game.value.levelId } })
+    .catch(() => {
+      errorMessage.value = '结算页面打开失败，请返回菜单后重试。'
+    })
 }
 
 function returnToMenu() {
@@ -108,9 +126,47 @@ async function prepareAssets() {
   }
 }
 
+function canControl(): boolean {
+  return (
+    !disposed &&
+    assetsReady.value &&
+    game.value.status === 'playing' &&
+    !showingResult.value &&
+    !document.hidden
+  )
+}
+
+/** 每次输入变化时合并来源，模拟循环仍只读取现有 controls。 */
+function applyInput() {
+  if (!canControl()) inputState.clearAll()
+  const input = inputState.read()
+  controls.direction = input.direction
+  controls.fireHeld = input.fireHeld
+}
+
 function clearInput() {
-  controls.direction = null
-  controls.fireHeld = false
+  // 先清来源，reset 的同步回调也不会重新读到上一局的触屏输入。
+  inputState.clearAll()
+  keyboardBinding?.reset()
+  inputResetKey.value++
+  applyInput()
+}
+
+function handleKeyboardDirection(direction: InputDirection) {
+  inputState.setDirection('keyboard', canControl() ? direction : null)
+  applyInput()
+}
+
+function handleTouchDirection(direction: InputDirection) {
+  if (direction !== null) void unlockGameAudio()
+  inputState.setDirection('touch', canControl() ? direction : null)
+  applyInput()
+}
+
+function handleTouchFire(held: boolean) {
+  if (held) void unlockGameAudio()
+  inputState.setFire('touch', canControl() && held)
+  applyInput()
 }
 
 function focusBattlefield() {
@@ -139,6 +195,17 @@ function startOrResume() {
 }
 
 async function restart() {
+  await startLevel(
+    showingResult.value ? (result.value?.levelId ?? game.value.levelId) : game.value.levelId,
+  )
+}
+
+async function nextLevel() {
+  if (!canNextLevel.value || !result.value?.levelId) return
+  await startLevel(result.value.levelId + 1)
+}
+
+async function startLevel(levelId: number) {
   if (!assetsReady.value || restarting.value) return
   restarting.value = true
   stopGameAudio()
@@ -147,11 +214,11 @@ async function restart() {
   matchId = createMatchId()
   result.value = null
   clearGameResult(resultStorageKey)
-  game.value = createSinglePlayerGame()
+  game.value = createSinglePlayerGame(Date.now(), levelId)
   startSinglePlayerGame(game.value)
   observeSinglePlayerAudio(game.value)
   try {
-    await router.replace({ name: 'game-single' })
+    await router.replace({ name: 'game-single', query: { level: levelId } })
     await nextTick(focusBattlefield)
   } catch {
     errorMessage.value = '新一局打开失败，请返回菜单后重试。'
@@ -191,7 +258,10 @@ function keyDown(event: KeyboardEvent) {
   if (!event.repeat) void unlockGameAudio()
   if (event.code === 'Space') {
     event.preventDefault()
-    if (game.value.status === 'playing') controls.fireHeld = true
+    if (!event.repeat) {
+      inputState.setFire('keyboard', canControl())
+      applyInput()
+    }
   } else if ((event.code === 'KeyP' || event.code === 'Escape') && !event.repeat) {
     event.preventDefault()
     togglePause()
@@ -202,13 +272,35 @@ function keyDown(event: KeyboardEvent) {
 }
 
 function keyUp(event: KeyboardEvent) {
-  if (event.code === 'Space') controls.fireHeld = false
+  if (event.code !== 'Space') return
+  inputState.setFire('keyboard', false)
+  applyInput()
 }
 
 function canvasBlur() {
   hasFocus.value = false
-  clearInput()
+  // 触控按钮获焦只释放键盘，不打断另一只手仍按住的移动或射击。
+  inputState.clear('keyboard')
+  applyInput()
 }
+
+watch(showingResult, (showing) => {
+  if (showing) clearInput()
+})
+watch(
+  () => route.query.level,
+  () => {
+    if (showingResult.value) return
+    const levelId = levelIdFromRoute()
+    if (levelId === game.value.levelId) return
+    clearInput()
+    stopGameAudio()
+    result.value = null
+    clearGameResult(resultStorageKey)
+    matchId = createMatchId()
+    game.value = createSinglePlayerGame(Date.now(), levelId)
+  },
+)
 
 onMounted(() => {
   const canvas = canvasRef.value
@@ -218,9 +310,7 @@ onMounted(() => {
     return
   }
   void prepareAssets()
-  releaseKeys = bindDirectionKeys(canvas, (direction) => {
-    controls.direction = game.value.status === 'playing' ? direction : null
-  })
+  keyboardBinding = bindDirectionKeys(canvas, handleKeyboardDirection)
   canvas.addEventListener('keydown', keyDown)
   window.addEventListener('keyup', keyUp)
   window.addEventListener('blur', pauseWhenAway)
@@ -256,7 +346,7 @@ onMounted(() => {
 onUnmounted(() => {
   disposed = true
   cancelAnimationFrame(animationId)
-  releaseKeys?.()
+  keyboardBinding?.dispose()
   clearInput()
   stopGameAudio()
   assets = null
@@ -274,10 +364,12 @@ onUnmounted(() => {
       :result="result"
       :can-retry="assetsReady"
       :retry-label="result ? '再来一局' : '开始游戏'"
+      :can-next-level="canNextLevel"
       :busy="restarting"
       :error="errorMessage"
       :show-lobby="false"
       @retry="restart"
+      @next-level="nextLevel"
       @menu="returnToMenu"
     />
   </RouterView>
@@ -285,21 +377,30 @@ onUnmounted(() => {
     <div class="solo-heading">
       <div>
         <span class="eyebrow">单人 PVE · 经典坦克大战</span>
-        <h1>守住最后的基地</h1>
-        <p class="muted">驾驶绿色坦克，击退 8 辆敌军坦克，保护底部的鹰形基地。</p>
+        <h1>第 {{ game.levelId }} 关 · {{ game.levelName }}</h1>
+        <p class="muted">
+          {{ currentLevel.description }} 击退 {{ game.totalEnemies }} 辆敌军，保护基地。
+        </p>
       </div>
       <RouterLink class="solo-badge" to="/game">← 返回菜单</RouterLink>
     </div>
     <p v-if="errorMessage" class="notice notice-error" role="alert">{{ errorMessage }}</p>
     <div class="solo-layout">
       <section class="solo-battle" aria-label="单人坦克战场">
-        <BattleFrame :hud="battleHud">
+        <BattleFrame
+          :hud="battleHud"
+          :active="!showingResult"
+          :controls-enabled="assetsReady && game.status === 'playing' && !showingResult"
+          :input-reset-key="inputResetKey"
+          @direction="handleTouchDirection"
+          @fire="handleTouchFire"
+        >
           <canvas
             ref="canvasRef"
             width="624"
             height="624"
             tabindex="0"
-            aria-label="单人坦克大战。WASD或方向键移动，空格射击，P暂停，R重开。"
+            aria-label="单人坦克大战。可用屏幕方向键和射击按钮，或WASD、方向键和空格操作，P暂停，R重开。"
             @pointerdown="focusBattlefield"
             @focus="hasFocus = true"
             @blur="canvasBlur"
@@ -349,7 +450,9 @@ onUnmounted(() => {
             </div>
           </div>
           <template #footer>
-            <span>{{ hasFocus ? 'WASD / 方向键移动 · 空格射击' : '点击战场后使用键盘' }}</span>
+            <span class="keyboard-hint">{{
+              hasFocus ? 'WASD / 方向键移动 · 空格射击' : '点击战场后使用键盘'
+            }}</span>
             <div class="battle-actions">
               <button
                 class="button"
@@ -357,10 +460,11 @@ onUnmounted(() => {
                 :disabled="game.status !== 'playing' && game.status !== 'paused'"
                 @click="togglePause"
               >
-                {{ game.status === 'paused' ? '继续 P' : '暂停 P' }}
+                {{ game.status === 'paused' ? '继续' : '暂停'
+                }}<span class="keyboard-shortcut"> P</span>
               </button>
               <button class="button" type="button" :disabled="!assetsReady" @click="restart">
-                重开 R
+                重开<span class="keyboard-shortcut"> R</span>
               </button>
             </div>
           </template>
@@ -369,6 +473,7 @@ onUnmounted(() => {
       <aside class="solo-sidebar">
         <section class="surface mission-card controls-card">
           <h2>操作</h2>
+          <p>手机：左侧方向区移动，右侧按住射击，可同时操作。横屏或全屏游玩视野更完整。</p>
           <p><kbd>W A S D</kbd> 或 <kbd>↑ ↓ ← →</kbd><span>移动与转向</span></p>
           <p><kbd>空格</kbd><span>按住连续开火</span></p>
           <p><kbd>P</kbd> / <kbd>Esc</kbd><span>暂停与继续</span></p>
@@ -378,7 +483,7 @@ onUnmounted(() => {
         <section class="mission-tips">
           <h2>战场提示</h2>
           <ul>
-            <li>击毁全部 8 辆敌军获胜。</li>
+            <li>击毁本关全部 {{ game.totalEnemies }} 辆敌军获胜。</li>
             <li>你的装甲归零，或基地被摧毁，任务失败。</li>
             <li>砖墙可破坏；钢墙和河流阻挡坦克。</li>
             <li>子弹可以越过河流，树林可以提供遮挡。</li>
@@ -439,7 +544,10 @@ onUnmounted(() => {
   background: #050b08b8;
 }
 .overlay-card {
-  max-width: 340px;
+  min-width: 0;
+  max-width: min(340px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
   padding: 30px 24px;
   text-align: center;
   border: 1px solid #66816588;
@@ -467,7 +575,8 @@ onUnmounted(() => {
 }
 .play-button {
   margin-top: 22px;
-  min-width: 150px;
+  min-width: min(150px, 100%);
+  max-width: 100%;
 }
 .solo-sidebar {
   display: grid;
@@ -543,6 +652,21 @@ kbd {
   }
   .overlay-card h2 {
     font-size: 25px;
+  }
+}
+@media (max-height: 600px) {
+  .game-overlay {
+    padding: 10px;
+  }
+  .overlay-card {
+    padding: 18px 16px;
+  }
+  .overlay-card h2 {
+    margin: 8px 0;
+    font-size: 23px;
+  }
+  .play-button {
+    margin-top: 12px;
   }
 }
 </style>

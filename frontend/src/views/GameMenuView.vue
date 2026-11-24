@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import GameAudioControls from '@/components/GameAudioControls.vue'
+import GameLevelPicker from '@/components/GameLevelPicker.vue'
+import { getGameLevel } from '@/game/maps/catalog'
 import { unlockGameAudio } from '@/game/audio/gameAudio'
 import { useAuthStore } from '@/stores/auth'
 import { loadSinglePlayerAssets } from '@/game/singleplayer/assets'
@@ -17,16 +19,17 @@ const showHelp = ref(false)
 const previewRef = ref<HTMLCanvasElement | null>(null)
 const previewReady = ref(false)
 const previewFailed = ref(false)
+const selectedLevelId = ref(1)
 const resourceBase = `${import.meta.env.BASE_URL}resources/png/`
 let disposed = false
 
-onMounted(async () => {
+async function drawPreview() {
   try {
     const assets = await loadSinglePlayerAssets()
     if (disposed) return
     const context = previewRef.value?.getContext('2d')
     if (!context) return
-    const scene = createSinglePlayerGame(42)
+    const scene = createSinglePlayerGame(42, selectedLevelId.value)
     startSinglePlayerGame(scene)
     for (let frame = 0; frame < 160; frame++)
       stepSinglePlayerGame(scene, { direction: null, fireHeld: false })
@@ -35,7 +38,9 @@ onMounted(async () => {
   } catch {
     if (!disposed) previewFailed.value = true
   }
-})
+}
+onMounted(drawPreview)
+watch(selectedLevelId, drawPreview)
 onUnmounted(() => {
   disposed = true
 })
@@ -64,7 +69,10 @@ onUnmounted(() => {
           <h1 id="game-menu-title">选择你的战场</h1>
           <p class="menu-intro">独自迎战敌军，或邀请朋友一起守住基地。</p>
           <nav class="mode-list" aria-label="游戏模式" @click="unlockGameAudio">
-            <RouterLink class="mode-option solo-option" :to="{ name: 'game-single' }">
+            <RouterLink
+              class="mode-option solo-option"
+              :to="{ name: 'game-single', query: { level: selectedLevelId } }"
+            >
               <span
                 class="mode-icon solo-icon"
                 :style="{ backgroundImage: 'url(' + resourceBase + 'players/tank_T2_0.png)' }"
@@ -76,7 +84,10 @@ onUnmounted(() => {
               >
               <span class="mode-arrow" aria-hidden="true">→</span>
             </RouterLink>
-            <RouterLink class="mode-option online-option" :to="{ name: 'game-online' }">
+            <RouterLink
+              class="mode-option online-option"
+              :to="{ name: 'game-online', query: { level: selectedLevelId } }"
+            >
               <span
                 class="mode-icon online-icon"
                 :style="{ backgroundImage: 'url(' + resourceBase + 'players/tank_T1_0.png)' }"
@@ -108,16 +119,19 @@ onUnmounted(() => {
             <span aria-hidden="true">{{ showHelp ? '−' : '+' }}</span>
           </button>
           <div v-if="showHelp" id="game-help" class="game-help">
-            <p><kbd>WASD</kbd> / <kbd>方向键</kbd> 移动 · <kbd>空格</kbd> 持续开火</p>
-            <p>单人：击退 8 辆敌军并保护基地，<kbd>P</kbd> 暂停、<kbd>R</kbd> 重开。</p>
+            <p>手机：左侧方向键移动，右侧按住射击，可以边移动边开火。</p>
+            <p>电脑：<kbd>WASD</kbd> / <kbd>方向键</kbd> 移动 · <kbd>空格</kbd> 持续开火</p>
+            <p>单人：消灭当前关卡的全部敌军并保护基地，<kbd>P</kbd> 暂停、<kbd>R</kbd> 重开。</p>
             <p>
-              合作：双方登录不同账号，分享房间号并准备。共同消灭 8
-              辆敌军、守住基地；队友之间不会互相伤害。
+              合作：双方登录不同账号，分享房间号并准备。房主选关后开始，共同消灭敌军、守住基地；队友之间不会互相伤害。
             </p>
           </div>
         </div>
         <div class="menu-preview" aria-label="游戏画面预览">
-          <div class="preview-caption"><span>STAGE 01</span><span>READY TO PLAY</span></div>
+          <div class="preview-caption">
+            <span>STAGE {{ String(selectedLevelId).padStart(2, '0') }}</span
+            ><span>{{ getGameLevel(selectedLevelId).name }}</span>
+          </div>
           <div class="preview-frame">
             <canvas
               ref="previewRef"
@@ -133,8 +147,15 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="machine-bottom">
-        <span>WASD / ↑ ↓ ← →</span><span>SPACE TO FIRE</span><span>SELECT YOUR MODE</span>
+        <span class="keyboard-hint">WASD / ↑ ↓ ← →</span>
+        <span class="keyboard-hint">SPACE TO FIRE</span>
+        <span class="touch-hint">左侧方向 · 右侧射击</span><span>SELECT YOUR MODE</span>
       </div>
+    </section>
+    <section class="map-selection" aria-labelledby="level-selection-title">
+      <h2 id="level-selection-title">选择地图关卡</h2>
+      <p>五张地图，逐步提升难度。选择后进入单人闯关，或在合作房间中由房主确认关卡。</p>
+      <GameLevelPicker v-model="selectedLevelId" />
     </section>
   </main>
 </template>
@@ -142,6 +163,19 @@ onUnmounted(() => {
 <style scoped>
 .game-menu-page {
   max-width: 1160px;
+}
+.map-selection {
+  margin-top: 24px;
+}
+.map-selection h2 {
+  margin-bottom: 8px;
+  font-size: 22px;
+}
+.map-selection > p {
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.8;
+  margin-bottom: 16px;
 }
 .menu-breadcrumb {
   display: flex;
@@ -268,6 +302,7 @@ onUnmounted(() => {
 .mode-copy {
   display: grid;
   gap: 5px;
+  min-width: 0;
 }
 .mode-kicker {
   color: #b5cb98;
@@ -300,6 +335,7 @@ onUnmounted(() => {
   font-size: 11px;
   line-height: 1.8;
   margin: 20px 0 15px;
+  overflow-wrap: anywhere;
 }
 .help-toggle {
   display: flex;
@@ -379,6 +415,26 @@ kbd {
   padding: 19px 6px 2px;
   color: #7d9685;
   font-size: 10px;
+  flex-wrap: wrap;
+}
+.touch-hint {
+  display: none;
+}
+@media (any-pointer: coarse) {
+  .keyboard-hint {
+    display: none;
+  }
+  .touch-hint {
+    display: inline;
+  }
+  .help-toggle {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .menu-audio :deep(.audio-toggle) {
+    min-height: 44px;
+    font-size: 13px;
+  }
 }
 @media (max-width: 900px) {
   .menu-screen {
@@ -419,6 +475,39 @@ kbd {
   .machine-bottom {
     font-size: 8px;
     letter-spacing: 0.3px;
+  }
+  .help-toggle {
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .mode-caption,
+  .menu-intro,
+  .menu-account,
+  .game-help,
+  .preview-note {
+    font-size: 13px;
+  }
+  .mode-caption {
+    overflow-wrap: anywhere;
+  }
+  .menu-audio :deep(.audio-toggle) {
+    min-height: 44px;
+    font-size: 13px;
+  }
+}
+@media (max-width: 380px) {
+  .menu-screen {
+    padding: 20px 14px;
+  }
+  .mode-option {
+    gap: 12px;
+    padding: 14px 12px;
+  }
+  .mode-arrow {
+    font-size: 20px;
+  }
+  .machine-edition {
+    display: none;
   }
 }
 </style>
