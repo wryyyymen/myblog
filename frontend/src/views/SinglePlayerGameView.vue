@@ -19,6 +19,7 @@ import { loadSinglePlayerAssets, type SinglePlayerAssets } from '@/game/singlepl
 import {
   clearGameResult,
   createSinglePlayerResult,
+  loadBestScores,
   loadGameResult,
   saveGameResult,
   updateBestScore,
@@ -100,12 +101,18 @@ function showResult() {
   clearInput()
   canvasRef.value?.blur()
 
-  // 先并入历史最佳，再存本次结算：结算页要同时显示本局得分和最佳分。
+  // 胜利时并入历史最佳。失败局不改写纪录，但仍把已有的最佳分带去结算页，
+  // 让玩家看到“差多少就能超过上次”。
   const record = updateBestScore(ending)
+  const existing =
+    record === null && ending.levelId !== undefined
+      ? loadBestScores()[ending.levelId]
+      : undefined
+  const best = record?.best ?? existing
   const shown =
-    record === null
+    best === undefined
       ? ending
-      : { ...ending, bestScore: record.best.score, isNewRecord: record.isNewRecord }
+      : { ...ending, bestScore: best.score, isNewRecord: record?.isNewRecord ?? false }
 
   result.value = shown
   saveGameResult(resultStorageKey, shown)
